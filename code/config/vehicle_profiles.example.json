@@ -1,0 +1,36 @@
+{
+  "vehicles": [
+    {
+      "global_id": 1,
+      "display_name": "Car 1",
+      "car_number": "1",
+      "color": "white",
+      "model": "Porsche 718GT4",
+      "notes": "測試車輛"
+    },
+    {
+      "global_id": 2,
+      "display_name": "Car 2",
+      "car_number": "2",
+      "color": "black",
+      "model": "Unknown",
+      "notes": "測試車輛"
+    },
+    {
+      "global_id": 3,
+      "display_name": "Car 3",
+      "car_number": "3",
+      "color": "unknown",
+      "model": "Unknown",
+      "notes": "測試車輛"
+    },
+    {
+      "global_id": 4,
+      "display_name": "Car 4",
+      "car_number": "4",
+      "color": "unknown",
+      "model": "Unknown",
+      "notes": "測試車輛"
+    }
+      ]
+    }
