@@ -44,3 +44,52 @@ AutoCamTracker 是一個以影片、螢幕區域或 webcam 作為輸入的車輛
 - V1.1 仍以單一車輛追蹤為主。
 - 目前 tracker id 屬於短期連續追蹤 id；車輛離開畫面後再回來，要維持同一全域 id，後續需要加入 Vehicle ReID 特徵比對。
 - 大型 `.pt` 模型建議使用 Git LFS 管理。
+
+---
+
+# AutoCamTracker V1.1 English
+
+AutoCamTracker is a vehicle detection and tracking desktop tool that can use a video file, a selected screen region, or a webcam as the input source. The V1.1 release focuses on a usable desktop prototype: loading frames, detecting vehicles with YOLO, selecting one target vehicle, and producing a digitally reframed tracking output.
+
+## Feature Overview
+
+- Supports three input sources: webcam, video file, and screen region.
+- Uses YOLO models to detect vehicles and display bbox, track id, and confidence.
+- Allows target selection by clicking a bbox in the Before view or by using Auto Track.
+- The After view digitally zooms and centers the frame based on the selected target.
+- Supports video playback speed control and timeline seeking.
+- Supports custom Before / After display sizes that adapt to the application window.
+
+## Project Structure
+
+- `code/V1/app.py`: Tkinter UI, control bar, Before / After display, timeline, and user interaction.
+- `code/V1/video_detector.py`: Video, webcam, and screen input handling, YOLO model loading, detection, and tracker integration.
+- `code/V1/detection_store.py`: Stores current detections, track history, and candidate vehicle ranking.
+- `code/V1/target_tracker.py`: Single target selection, lost state handling, and tracking state management.
+- `code/V1/reframer.py`: Builds the crop window from the target bbox and produces the tracking output frame.
+- `code/V1/tracker_adapter.py`: Adapter for external trackers.
+- `code/model/`: YOLO model and external tracker resources.
+- `management/AutoCamTracker_Development/`: Development specs, technical reports, and version change logs.
+
+## How To Run
+
+Run from the project root:
+
+```bash
+.venv/bin/python run_v1_app.py
+```
+
+Basic workflow:
+
+1. Select `webcam`, `video_file`, or `screen_region` in the Source section.
+2. If using a video file, click `Browse Video` and choose a file.
+3. Select the model, tracker, and framing mode in the Tracking section.
+4. Click `Start` to begin detection.
+5. Click a vehicle bbox in the Before view, or click `Auto Track`.
+6. Check the reframed tracking result in the After view.
+
+## V1.1 Notes
+
+- V1.1 focuses on single-vehicle tracking.
+- Current tracker ids are short-term continuous tracking ids. To keep the same global id after a vehicle leaves and returns to the frame, a future version should add Vehicle ReID feature matching.
+- Large `.pt` model files should be managed with Git LFS.
