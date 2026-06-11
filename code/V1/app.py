@@ -12,7 +12,7 @@ the other four modules.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import sys
 from time import time
@@ -75,6 +75,11 @@ class AutoCamTrackerApp:
         self.fps = 0.0
         self.skipped_frames = 0
         self.model_options: dict[str, str] = {}
+        self.active_input_signature: tuple[object, ...] | None = None
+        self.last_frame_shape: tuple[int, int, int] | tuple[int, int] | None = None
+        self.display_width = self.config.output_width
+        self.display_height = self.config.output_height
+        self.timeline_dragging = False
 
         self.before_image_ref = None
         self.after_image_ref = None
@@ -90,15 +95,18 @@ class AutoCamTrackerApp:
         controls = ttk.Frame(main)
         controls.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
 
-        ttk.Button(controls, text="▶", width=4, command=self.start).grid(row=0, column=0, padx=4)
-        ttk.Button(controls, text="⏸", width=4, command=self.pause).grid(row=0, column=1, padx=4)
-        ttk.Button(controls, text="⏹", width=4, command=self.stop).grid(row=0, column=2, padx=4)
-        ttk.Button(controls, text="↺", width=4, command=self.reset_tracking).grid(row=0, column=3, padx=4)
-        ttk.Button(controls, text="Browse Video", command=self.choose_video_file).grid(row=0, column=4, padx=4)
-        ttk.Button(controls, text="Select Screen Region", command=self.select_screen_region).grid(row=0, column=5, padx=4)
-        ttk.Button(controls, text="Clear Selection", command=self.clear_selection).grid(row=0, column=6, padx=4)
-        ttk.Button(controls, text="Auto One", command=self.auto_select_one).grid(row=0, column=7, padx=4)
-        ttk.Button(controls, text="Record", command=self.toggle_recording).grid(row=0, column=8, padx=4)
+        source_controls = ttk.LabelFrame(controls, text="Source", padding=8, width=395, height=190)
+        source_controls.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
+        tracking_controls = ttk.LabelFrame(controls, text="Tracking", padding=8, width=395, height=190)
+        tracking_controls.grid(row=0, column=1, sticky="nsew", padx=6, pady=6)
+        playback_controls = ttk.LabelFrame(controls, text="Playback", padding=8, width=395, height=190)
+        playback_controls.grid(row=1, column=0, sticky="nsew", padx=6, pady=6)
+        view_controls = ttk.LabelFrame(controls, text="View", padding=8, width=395, height=190)
+        view_controls.grid(row=1, column=1, sticky="nsew", padx=6, pady=6)
+        for panel in (source_controls, tracking_controls, playback_controls, view_controls):
+            panel.grid_propagate(False)
+        controls.columnconfigure(0, weight=0, minsize=407)
+        controls.columnconfigure(1, weight=0, minsize=407)
 
         self.source_var = tk.StringVar(value="webcam")
         self.tracker_var = tk.StringVar(value="botsort")
@@ -108,113 +116,178 @@ class AutoCamTrackerApp:
         self.camera_index_var = tk.StringVar(value="0")
         self.video_path_var = tk.StringVar(value="No video selected")
         self.screen_region_var = tk.StringVar(value="No screen region selected")
+        self.view_width_var = tk.StringVar(value=str(self.config.output_width))
+        self.view_height_var = tk.StringVar(value=str(self.config.output_height))
+        self.auto_stretch_var = tk.BooleanVar(value=True)
+        self.timeline_var = tk.DoubleVar(value=0.0)
+        self.timeline_label_var = tk.StringVar(value="00:00 / 00:00")
 
-        ttk.Label(controls, text="Input").grid(row=1, column=0, padx=4, pady=(8, 0))
+        ttk.Label(source_controls, text="Input").grid(row=0, column=0, sticky="w", padx=4)
         ttk.Combobox(
-            controls,
+            source_controls,
             textvariable=self.source_var,
             values=["webcam", "video_file", "screen_region"],
-            width=14,
+            width=21,
             state="readonly",
-        ).grid(row=1, column=1, padx=4, pady=(8, 0))
+        ).grid(row=0, column=1, sticky="ew", padx=4)
+        ttk.Button(source_controls, text="Browse Video", width=18, command=self.choose_video_file).grid(row=1, column=0, sticky="ew", padx=4, pady=(8, 0))
+        ttk.Button(source_controls, text="Screen Region", width=18, command=self.select_screen_region).grid(row=1, column=1, sticky="ew", padx=4, pady=(8, 0))
 
-        ttk.Label(controls, text="Tracker").grid(row=1, column=2, padx=4, pady=(8, 0))
-        ttk.Combobox(
-            controls,
-            textvariable=self.tracker_var,
-            values=["botsort", "deepocsort"],
-            width=14,
-            state="readonly",
-        ).grid(row=1, column=3, padx=4, pady=(8, 0))
+        ttk.Label(source_controls, textvariable=self.video_path_var, wraplength=320).grid(row=2, column=0, columnspan=2, sticky="w", padx=4, pady=(8, 0))
+        ttk.Label(source_controls, textvariable=self.screen_region_var, wraplength=320).grid(row=3, column=0, columnspan=2, sticky="w", padx=4, pady=(3, 0))
+        source_controls.columnconfigure(1, weight=1)
 
-        ttk.Label(controls, text="Framing").grid(row=1, column=4, padx=4, pady=(8, 0))
-        framing_box = ttk.Combobox(
-            controls,
-            textvariable=self.framing_var,
-            values=["wide", "medium", "close"],
-            width=10,
-            state="readonly",
-        )
-        framing_box.grid(row=1, column=5, padx=4, pady=(8, 0))
-        framing_box.bind("<<ComboboxSelected>>", lambda _: self.apply_ui_config())
-
-        ttk.Label(controls, text="Camera").grid(row=1, column=6, padx=4, pady=(8, 0))
-        ttk.Combobox(
-            controls,
-            textvariable=self.camera_index_var,
-            values=["0", "1", "2", "3", "4"],
-            width=6,
-            state="readonly",
-        ).grid(row=1, column=7, padx=4, pady=(8, 0))
-        ttk.Button(controls, text="Test Camera", command=self.test_camera).grid(row=1, column=8, padx=4, pady=(8, 0))
-
-        ttk.Label(controls, text="Model").grid(row=2, column=0, padx=4, pady=(8, 0))
+        ttk.Label(tracking_controls, text="Model").grid(row=0, column=0, sticky="w", padx=4)
         self.model_box = ttk.Combobox(
-            controls,
+            tracking_controls,
             textvariable=self.model_var,
             values=[],
-            width=42,
+            width=21,
             state="readonly",
         )
-        self.model_box.grid(row=2, column=1, columnspan=4, padx=4, pady=(8, 0), sticky="ew")
-        ttk.Button(controls, text="Refresh Models", command=self.refresh_model_options).grid(row=2, column=5, padx=4, pady=(8, 0))
-        ttk.Button(controls, text="Browse Model", command=self.choose_model_file).grid(row=2, column=6, padx=4, pady=(8, 0))
+        self.model_box.grid(row=0, column=1, padx=4, sticky="ew")
+        ttk.Button(tracking_controls, text="Refresh", width=12, command=self.refresh_model_options).grid(row=0, column=2, padx=4)
 
-        ttk.Label(controls, text="Speed").grid(row=2, column=7, padx=4, pady=(8, 0))
+        ttk.Label(tracking_controls, text="Tracker").grid(row=1, column=0, sticky="w", padx=4, pady=(8, 0))
         ttk.Combobox(
-            controls,
-            textvariable=self.playback_speed_var,
-            values=["0.25x", "0.5x", "1x", "1.25x", "1.5x"],
-            width=8,
+            tracking_controls,
+            textvariable=self.tracker_var,
+            values=["botsort", "deepocsort"],
+            width=15,
             state="readonly",
-        ).grid(row=2, column=8, padx=4, pady=(8, 0))
+        ).grid(row=1, column=1, sticky="ew", padx=4, pady=(8, 0))
 
-        ttk.Label(controls, textvariable=self.video_path_var).grid(row=3, column=0, columnspan=6, sticky="w", padx=4, pady=(8, 0))
-        ttk.Label(controls, textvariable=self.screen_region_var).grid(row=3, column=6, columnspan=5, sticky="w", padx=4, pady=(8, 0))
+        ttk.Label(tracking_controls, text="Framing").grid(row=2, column=0, sticky="w", padx=4, pady=(8, 0))
+        framing_box = ttk.Combobox(
+            tracking_controls,
+            textvariable=self.framing_var,
+            values=["wide", "medium", "close"],
+            width=15,
+            state="readonly",
+        )
+        framing_box.grid(row=2, column=1, sticky="ew", padx=4, pady=(8, 0))
+        framing_box.bind("<<ComboboxSelected>>", lambda _: self.apply_ui_config())
+        ttk.Button(tracking_controls, text="Clear Selection", width=18, command=self.clear_selection).grid(row=3, column=0, columnspan=3, sticky="ew", padx=4, pady=(10, 0))
+        ttk.Button(tracking_controls, text="Auto Track", width=18, command=self.auto_select_one).grid(row=4, column=0, columnspan=2, sticky="ew", padx=4, pady=(8, 0))
+        ttk.Button(tracking_controls, text="Reset", width=14, command=self.reset_tracking).grid(row=4, column=2, sticky="ew", padx=4, pady=(8, 0))
+        tracking_controls.columnconfigure(1, weight=1)
+        tracking_controls.columnconfigure(2, weight=1)
 
+        ttk.Button(playback_controls, text="Start", width=16, command=self.start).grid(row=0, column=0, sticky="ew", padx=4, pady=4)
+        ttk.Button(playback_controls, text="Pause", width=16, command=self.pause).grid(row=0, column=1, sticky="ew", padx=4, pady=4)
+        ttk.Button(playback_controls, text="Stop", width=16, command=self.stop).grid(row=1, column=0, sticky="ew", padx=4, pady=4)
+        ttk.Button(playback_controls, text="Record", width=16, command=self.toggle_recording).grid(row=1, column=1, sticky="ew", padx=4, pady=4)
+
+        ttk.Label(playback_controls, text="Speed").grid(row=2, column=0, sticky="w", padx=4, pady=(8, 0))
+        ttk.Combobox(
+            playback_controls,
+            textvariable=self.playback_speed_var,
+            values=["0.25x", "0.5x", "1x", "1.25x", "1.5x", "3x", "4x", "5x", "6x"],
+            width=15,
+            state="readonly",
+        ).grid(row=2, column=1, sticky="ew", padx=4, pady=(8, 0))
+        playback_controls.columnconfigure(0, weight=1)
+        playback_controls.columnconfigure(1, weight=1)
+
+        ttk.Checkbutton(
+            view_controls,
+            text="Stretch",
+            variable=self.auto_stretch_var,
+        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=4, pady=4)
+        ttk.Label(view_controls, text="Width").grid(row=1, column=0, sticky="w", padx=4, pady=(8, 0))
+        ttk.Entry(view_controls, textvariable=self.view_width_var, width=10).grid(row=1, column=1, sticky="ew", padx=4, pady=(8, 0))
+        ttk.Label(view_controls, text="Height").grid(row=2, column=0, sticky="w", padx=4, pady=(8, 0))
+        ttk.Entry(view_controls, textvariable=self.view_height_var, width=10).grid(row=2, column=1, sticky="ew", padx=4, pady=(8, 0))
+        ttk.Button(view_controls, text="Apply Size", width=16, command=self.apply_view_size).grid(row=3, column=0, columnspan=2, sticky="ew", padx=4, pady=(8, 0))
+        view_controls.columnconfigure(1, weight=1)
+
+        main.columnconfigure(0, weight=1)
+        main.columnconfigure(1, weight=1)
+        main.rowconfigure(1, weight=1)
         views = ttk.Frame(main)
         views.grid(row=1, column=0, columnspan=2, sticky="nsew")
         views.columnconfigure(0, weight=1)
         views.columnconfigure(1, weight=1)
+        views.rowconfigure(1, weight=1)
+        views.bind("<Configure>", self.on_views_resize)
 
         ttk.Label(views, text="Before: raw + detection").grid(row=0, column=0)
         ttk.Label(views, text="After: reframe output").grid(row=0, column=1)
 
         self.before_label = ttk.Label(views)
-        self.before_label.grid(row=1, column=0, padx=6, pady=6)
+        self.before_label.grid(row=1, column=0, padx=6, pady=6, sticky="nsew")
+        self.before_label.configure(cursor="hand2", anchor="nw")
+        self.before_label.bind("<Button-1>", self.on_before_click)
         self.after_label = ttk.Label(views)
-        self.after_label.grid(row=1, column=1, padx=6, pady=6)
+        self.after_label.grid(row=1, column=1, padx=6, pady=6, sticky="nsew")
+        self.after_label.configure(anchor="nw")
+
+        timeline = ttk.Frame(views)
+        timeline.grid(row=2, column=0, sticky="ew", padx=6, pady=(0, 6))
+        timeline.columnconfigure(0, weight=1)
+        self.timeline_scale = ttk.Scale(
+            timeline,
+            from_=0,
+            to=0,
+            orient="horizontal",
+            variable=self.timeline_var,
+            command=self.on_timeline_drag,
+        )
+        self.timeline_scale.grid(row=0, column=0, sticky="ew")
+        self.timeline_scale.bind("<ButtonPress-1>", self.on_timeline_press)
+        self.timeline_scale.bind("<ButtonRelease-1>", self.on_timeline_release)
+        ttk.Label(timeline, textvariable=self.timeline_label_var, width=16).grid(row=0, column=1, padx=(8, 0))
 
         self.status_var = tk.StringVar(value="Status: idle")
         ttk.Label(main, textvariable=self.status_var).grid(row=2, column=0, columnspan=2, sticky="w")
 
     def apply_ui_config(self) -> None:
-        self.input_config.source_type = self.source_var.get()
-        self.input_config.tracker_name = self.tracker_var.get()
-        self.input_config.model_path = self.model_options.get(
-            self.model_var.get(),
-            self.model_var.get() or self.config.default_model,
-        )
-        try:
-            self.input_config.camera_index = int(self.camera_index_var.get())
-        except ValueError:
-            self.input_config.camera_index = 0
+        self.input_config = self._ui_input_config()
         self.reframer.set_framing_mode(self.framing_var.get())
+
+    def _ui_input_config(self) -> InputConfig:
+        try:
+            camera_index = int(self.camera_index_var.get())
+        except ValueError:
+            camera_index = 0
+
+        return InputConfig(
+            source_type=self.source_var.get(),
+            camera_index=camera_index,
+            video_path=self.input_config.video_path,
+            screen_region=self.input_config.screen_region,
+            model_path=self.model_options.get(
+                self.model_var.get(),
+                self.model_var.get() or self.config.default_model,
+            ),
+            tracker_name=self.tracker_var.get(),
+            confidence_threshold=self.input_config.confidence_threshold,
+            iou_threshold=self.input_config.iou_threshold,
+            vehicle_classes_only=self.input_config.vehicle_classes_only,
+        )
 
     def start(self) -> None:
         try:
-            if self.detector is not None and not self.running:
+            self.apply_ui_config()
+            desired_signature = self._input_signature(self.input_config)
+            can_resume_current_source = (
+                self.detector is not None
+                and not self.running
+                and self.active_input_signature == desired_signature
+            )
+            if can_resume_current_source:
                 self.running = True
                 self.last_frame_time = time()
                 self._loop()
                 return
 
-            self.apply_ui_config()
             if self.detector is not None:
-                self.detector.close()
-            self.detector = VideoDetector(self.input_config)
+                self._close_detector()
+            self._reset_runtime_state()
+            self.detector = VideoDetector(replace(self.input_config))
             self.detector.load_model()
             self.detector.open_source()
+            self.active_input_signature = desired_signature
             self.running = True
             self.last_frame_time = time()
             self.skipped_frames = 0
@@ -222,7 +295,7 @@ class AutoCamTrackerApp:
         except Exception as exc:
             self.running = False
             if self.detector is not None:
-                self.detector.close()
+                self._close_detector()
                 self.detector = None
             messagebox.showerror("Start failed", str(exc))
 
@@ -232,12 +305,13 @@ class AutoCamTrackerApp:
     def stop(self) -> None:
         self.running = False
         if self.detector is not None:
-            self.detector.close()
+            self._close_detector()
         self.detector = None
+        self.active_input_signature = None
+        self._reset_runtime_state()
 
     def reset_tracking(self) -> None:
-        self.target_tracker.clear_selection()
-        self.reframer.reset()
+        self._reset_runtime_state()
 
     def clear_selection(self) -> None:
         self.target_tracker.clear_selection()
@@ -250,22 +324,7 @@ class AutoCamTrackerApp:
         if path:
             self.source_var.set("video_file")
             self.input_config.video_path = path
-            self.video_path_var.set(f"Video: {path}")
-
-    def choose_model_file(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Choose YOLO model",
-            initialdir=str(self.config.model_dir) if self.config.model_dir.exists() else str(Path.cwd()),
-            filetypes=[
-                ("YOLO model files", "*.pt *.pth *.onnx *.engine *.mlpackage *.torchscript"),
-                ("All files", "*.*"),
-            ],
-        )
-        if path:
-            label = self._model_label(Path(path))
-            self.model_options[label] = path
-            self.model_box.configure(values=list(self.model_options.keys()))
-            self.model_var.set(label)
+            self.video_path_var.set(f"Video: {self._short_label(Path(path).name)}")
 
     def refresh_model_options(self) -> None:
         model_files = self._discover_model_files()
@@ -358,29 +417,63 @@ class AutoCamTrackerApp:
         overlay = Image.new("RGB", screenshot.size, (0, 0, 0))
         return Image.blend(screenshot.convert("RGB"), overlay, 0.22)
 
-    def test_camera(self) -> None:
-        import cv2
-
-        try:
-            camera_index = int(self.camera_index_var.get())
-        except ValueError:
-            camera_index = 0
-        backend = cv2.CAP_AVFOUNDATION if sys.platform == "darwin" else cv2.CAP_ANY
-        capture = cv2.VideoCapture(camera_index, backend)
-        ok, _ = capture.read() if capture.isOpened() else (False, None)
-        capture.release()
-        if ok:
-            messagebox.showinfo("Camera test", f"Camera index {camera_index} opened successfully.")
-        else:
-            messagebox.showerror(
-                "Camera test failed",
-                "Unable to open camera. Check macOS camera permission, camera index, "
-                "and whether another app is using the camera.",
-            )
-
     def auto_select_one(self) -> None:
-        candidates = self.store.rank_candidates(strategy="largest")
+        candidates = self.store.rank_candidates(self.last_frame_shape, strategy="stable")
         self.target_tracker.auto_select_one(candidates)
+
+    def apply_view_size(self) -> None:
+        width = self._parse_dimension(self.view_width_var.get(), self.display_width)
+        height = self._parse_dimension(self.view_height_var.get(), self.display_height)
+        self.auto_stretch_var.set(False)
+        self._set_display_size(width, height, update_fields=True)
+
+    def on_views_resize(self, event) -> None:
+        if not self.auto_stretch_var.get():
+            return
+        width = max(160, (event.width - 24) // 2)
+        height = max(90, event.height - 72)
+        self._set_display_size(width, height, update_fields=True)
+
+    def on_timeline_press(self, _event) -> None:
+        self.timeline_dragging = True
+
+    def on_timeline_drag(self, value: str) -> None:
+        if self.timeline_dragging:
+            self._update_timeline_label(int(float(value)))
+
+    def on_timeline_release(self, _event) -> None:
+        self.timeline_dragging = False
+        if self.detector is None or self.input_config.source_type != "video_file":
+            return
+
+        target_frame = int(self.timeline_var.get())
+        if not self.detector.seek_video_frame(target_frame):
+            return
+
+        self.store.reset()
+        self.target_tracker.clear_selection()
+        self.reframer.reset()
+        self.skipped_frames = 0
+        self._render_current_video_frame()
+
+    def on_before_click(self, event) -> None:
+        if self.last_frame_shape is None:
+            return
+
+        frame_height, frame_width = self.last_frame_shape[:2]
+        image_width = max(1, self.display_width)
+        image_height = max(1, self.display_height)
+        frame_x = event.x * frame_width / image_width
+        frame_y = event.y * frame_height / image_height
+
+        candidate = self.store.get_candidate_at_point(frame_x, frame_y, self.last_frame_shape)
+        if candidate is None:
+            self.status_var.set("Status: no tracked vehicle at clicked point")
+            return
+
+        self.target_tracker.select_track(candidate.track_id)
+        self.target_tracker.update_from_store(self.store)
+        self.status_var.set(f"Status: selected track id {candidate.track_id}")
 
     def toggle_recording(self) -> None:
         self.recording = not self.recording
@@ -399,17 +492,12 @@ class AutoCamTrackerApp:
             self.stop()
             return
 
-        candidates = self.store.update(detections, frame.shape)
-        selected_targets = self.target_tracker.update_from_store(self.store)
-        after_frame, framing_status = self.reframer.render(frame, selected_targets)
-
+        candidates, framing_status = self._process_frame(frame, detections)
         now = time()
         elapsed = max(1e-6, now - self.last_frame_time)
         self.fps = 1.0 / elapsed
         self.last_frame_time = now
 
-        before_frame = self._draw_detections(frame, detections)
-        self._update_images(before_frame, after_frame)
         state = self.target_tracker.get_state()
         self.status_var.set(
             "Status: "
@@ -424,7 +512,26 @@ class AutoCamTrackerApp:
             messagebox.showwarning("Tracking failed", str(state["lost_alert"]))
 
         self._drop_late_video_frames()
+        self._sync_timeline_from_detector()
         self.root.after(self._next_loop_delay_ms(), self._loop)
+
+    def _process_frame(self, frame, detections):
+        self.last_frame_shape = frame.shape
+        candidates = self.store.update(detections, frame.shape)
+        selected_targets = self.target_tracker.update_from_store(self.store)
+        after_frame, framing_status = self.reframer.render(frame, selected_targets)
+        before_frame = self._draw_detections(frame, detections)
+        self._update_images(before_frame, after_frame)
+        return candidates, framing_status
+
+    def _render_current_video_frame(self) -> None:
+        if self.detector is None:
+            return
+        frame, detections = self.detector.read_and_track()
+        if frame is None:
+            return
+        self._process_frame(frame, detections)
+        self._sync_timeline_from_detector()
 
     def _next_loop_delay_ms(self) -> int:
         if self.detector is None or self.input_config.source_type != "video_file":
@@ -471,6 +578,91 @@ class AutoCamTrackerApp:
             return "--"
         return f"{source_fps:.1f}"
 
+    def _sync_timeline_from_detector(self) -> None:
+        if self.detector is None or self.input_config.source_type != "video_file":
+            self.timeline_scale.configure(to=0)
+            self.timeline_var.set(0)
+            self.timeline_label_var.set("00:00 / 00:00")
+            return
+
+        frame_count = self.detector.get_source_frame_count() or 0
+        current_frame = self.detector.get_current_frame_index()
+        self.timeline_scale.configure(to=max(0, frame_count - 1))
+        if not self.timeline_dragging:
+            self.timeline_var.set(min(max(0, current_frame), max(0, frame_count - 1)))
+            self._update_timeline_label(current_frame)
+
+    def _update_timeline_label(self, frame_index: int) -> None:
+        frame_count = self.detector.get_source_frame_count() if self.detector is not None else None
+        fps = self.detector.get_source_fps() if self.detector is not None else None
+        if not frame_count or not fps:
+            self.timeline_label_var.set(f"{frame_index}")
+            return
+        current_seconds = max(0.0, frame_index / fps)
+        total_seconds = max(0.0, frame_count / fps)
+        self.timeline_label_var.set(
+            f"{self._format_time(current_seconds)} / {self._format_time(total_seconds)}"
+        )
+
+    def _reset_runtime_state(self) -> None:
+        self.store.reset()
+        self.target_tracker.clear_selection()
+        self.reframer.reset()
+        self.last_frame_shape = None
+        self.skipped_frames = 0
+
+    def _set_display_size(self, width: int, height: int, update_fields: bool = False) -> None:
+        width = max(160, min(3840, int(width)))
+        height = max(90, min(2160, int(height)))
+        if width == self.display_width and height == self.display_height:
+            return
+
+        self.display_width = width
+        self.display_height = height
+        self.config.output_width = width
+        self.config.output_height = height
+        self.reframer.config.output_width = width
+        self.reframer.config.output_height = height
+        if update_fields:
+            self.view_width_var.set(str(width))
+            self.view_height_var.set(str(height))
+
+    @staticmethod
+    def _parse_dimension(value: str, fallback: int) -> int:
+        try:
+            return int(value)
+        except ValueError:
+            return fallback
+
+    @staticmethod
+    def _format_time(seconds: float) -> str:
+        total_seconds = int(round(seconds))
+        minutes, secs = divmod(total_seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+        return f"{minutes:02d}:{secs:02d}"
+
+    def _close_detector(self) -> None:
+        if self.detector is None:
+            return
+        clear_temp_cache = self.detector.config.source_type == "video_file"
+        self.detector.close(clear_temp_cache=clear_temp_cache)
+
+    @staticmethod
+    def _input_signature(config: InputConfig) -> tuple[object, ...]:
+        return (
+            config.source_type,
+            config.camera_index,
+            config.video_path,
+            config.screen_region,
+            config.model_path,
+            config.tracker_name,
+            config.confidence_threshold,
+            config.iou_threshold,
+            config.vehicle_classes_only,
+        )
+
     def _discover_model_files(self) -> list[Path]:
         suffixes = {".pt", ".pth", ".onnx", ".engine", ".mlpackage", ".torchscript"}
         if not self.config.model_dir.exists():
@@ -487,6 +679,13 @@ class AutoCamTrackerApp:
         except ValueError:
             return str(path)
 
+    @staticmethod
+    def _short_label(value: str, max_length: int = 38) -> str:
+        if len(value) <= max_length:
+            return value
+        keep = max(8, max_length - 3)
+        return f"{value[:keep]}..."
+
     def _draw_detections(self, frame, detections):
         import cv2
 
@@ -495,13 +694,15 @@ class AutoCamTrackerApp:
             x1, y1, x2, y2 = [int(value) for value in detection.bbox]
             label = f"id:{detection.track_id} {detection.class_name} {detection.confidence:.2f}"
             color = (0, 220, 255) if detection.track_id in self.target_tracker.selected_track_ids else (80, 220, 80)
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3)
+            font_face = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = cv2.getFontScaleFromHeight(font_face, 20, 2)
             cv2.putText(
                 annotated,
                 label,
-                (x1, max(20, y1 - 8)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
+                (x1, max(24, y1 - 10)),
+                font_face,
+                font_scale,
                 color,
                 2,
                 cv2.LINE_AA,
@@ -516,12 +717,9 @@ class AutoCamTrackerApp:
         before_rgb = cv2.cvtColor(before_frame, cv2.COLOR_BGR2RGB)
         after_rgb = cv2.cvtColor(after_frame, cv2.COLOR_BGR2RGB)
 
-        before_image = Image.fromarray(before_rgb).resize(
-            (self.config.output_width, self.config.output_height)
-        )
-        after_image = Image.fromarray(after_rgb).resize(
-            (self.config.output_width, self.config.output_height)
-        )
+        size = (self.display_width, self.display_height)
+        before_image = Image.fromarray(before_rgb).resize(size)
+        after_image = Image.fromarray(after_rgb).resize(size)
 
         self.before_image_ref = ImageTk.PhotoImage(before_image)
         self.after_image_ref = ImageTk.PhotoImage(after_image)

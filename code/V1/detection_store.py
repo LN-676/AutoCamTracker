@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover
     from .video_detector import TrackedDetection
 
 
-RankStrategy = Literal["largest", "center", "confidence"]
+RankStrategy = Literal["stable", "largest", "center", "confidence"]
 
 
 @dataclass
@@ -33,6 +33,9 @@ class VehicleCandidate:
     area: float
     distance_to_frame_center: float
     frame_index: int
+    age_frames: int
+    lost_frame_count: int
+    stability_score: float
 
 
 @dataclass
@@ -68,6 +71,12 @@ class DetectionStore:
         self.current_detections: list[TrackedDetection] = []
         self.vehicle_tracks: dict[int, VehicleTrack] = {}
         self.detection_history: deque[list[TrackedDetection]] = deque(maxlen=history_size)
+        self.current_frame_index = 0
+
+    def reset(self) -> None:
+        self.current_detections = []
+        self.vehicle_tracks = {}
+        self.detection_history.clear()
         self.current_frame_index = 0
 
     def update(
@@ -134,6 +143,18 @@ class DetectionStore:
                     area=area,
                     distance_to_frame_center=distance,
                     frame_index=detection.frame_index,
+                    age_frames=max(1, detection.frame_index - self.vehicle_tracks[detection.track_id].first_seen_frame + 1),
+                    lost_frame_count=self.vehicle_tracks[detection.track_id].lost_frame_count,
+                    stability_score=self._stability_score(
+                        confidence=detection.confidence,
+                        area=area,
+                        frame_shape=frame_shape,
+                        distance_to_frame_center=distance,
+                        age_frames=max(
+                            1,
+                            detection.frame_index - self.vehicle_tracks[detection.track_id].first_seen_frame + 1,
+                        ),
+                    ),
                 )
             )
         return candidates
@@ -144,6 +165,8 @@ class DetectionStore:
         strategy: RankStrategy = "largest",
     ) -> list[VehicleCandidate]:
         candidates = self.get_candidates(frame_shape)
+        if strategy == "stable":
+            return sorted(candidates, key=lambda item: item.stability_score, reverse=True)
         if strategy == "largest":
             return sorted(candidates, key=lambda item: item.area, reverse=True)
         if strategy == "center":
@@ -155,6 +178,29 @@ class DetectionStore:
     def get_track(self, track_id: int) -> VehicleTrack | None:
         return self.vehicle_tracks.get(track_id)
 
+    def get_candidate_at_point(
+        self,
+        x: float,
+        y: float,
+        frame_shape: tuple[int, int, int] | tuple[int, int] | None = None,
+        padding_ratio: float = 0.08,
+    ) -> VehicleCandidate | None:
+        candidates = self.get_candidates(frame_shape)
+        hits: list[tuple[float, float, VehicleCandidate]] = []
+        for candidate in candidates:
+            x1, y1, x2, y2 = candidate.bbox
+            width = max(1.0, x2 - x1)
+            height = max(1.0, y2 - y1)
+            pad = max(8.0, min(width, height) * padding_ratio)
+            if x1 - pad <= x <= x2 + pad and y1 - pad <= y <= y2 + pad:
+                center_distance = hypot(x - candidate.center[0], y - candidate.center[1])
+                hits.append((candidate.area, center_distance, candidate))
+
+        if not hits:
+            return None
+        _, _, candidate = min(hits, key=lambda item: (item[0], item[1]))
+        return candidate
+
     @staticmethod
     def _frame_center(
         frame_shape: tuple[int, int, int] | tuple[int, int] | None,
@@ -163,3 +209,24 @@ class DetectionStore:
             return (0.0, 0.0)
         height, width = frame_shape[:2]
         return (width / 2.0, height / 2.0)
+
+    @staticmethod
+    def _stability_score(
+        confidence: float,
+        area: float,
+        frame_shape: tuple[int, int, int] | tuple[int, int] | None,
+        distance_to_frame_center: float,
+        age_frames: int,
+    ) -> float:
+        if frame_shape is None:
+            frame_area = max(1.0, area)
+            frame_diagonal = 1.0
+        else:
+            height, width = frame_shape[:2]
+            frame_area = max(1.0, float(width * height))
+            frame_diagonal = max(1.0, hypot(width, height))
+
+        area_score = min(1.0, area / frame_area * 12.0)
+        center_score = max(0.0, 1.0 - distance_to_frame_center / frame_diagonal)
+        age_score = min(1.0, age_frames / 12.0)
+        return confidence * 0.45 + area_score * 0.25 + center_score * 0.15 + age_score * 0.15

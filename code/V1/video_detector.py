@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 from time import time
@@ -27,6 +28,7 @@ TrackerName = Literal["botsort", "deepocsort"]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODEL_DIR = PROJECT_ROOT / "code" / "model"
+CACHE_ROOT = Path(tempfile.gettempdir()) / "autocamtracker-cache"
 
 
 TRACKER_CONFIGS: dict[TrackerName, str] = {
@@ -51,8 +53,8 @@ class InputConfig:
     screen_region: tuple[int, int, int, int] | None = None
     model_path: str = "yolo11n.pt"
     tracker_name: TrackerName = "botsort"
-    confidence_threshold: float = 0.25
-    iou_threshold: float = 0.7
+    confidence_threshold: float = 0.20
+    iou_threshold: float = 0.65
     vehicle_classes_only: bool = True
 
 
@@ -79,11 +81,12 @@ class VideoDetector:
         self.capture: Any | None = None
         self.screen_capture: Any | None = None
         self.source_fps: float | None = None
+        self.source_frame_count: int | None = None
         self.frame_index = 0
         self._cv2 = None
 
     def load_model(self) -> None:
-        cache_root = Path(tempfile.gettempdir()) / "autocamtracker-cache"
+        cache_root = CACHE_ROOT
         cache_root.mkdir(parents=True, exist_ok=True)
         for name in ("ultralytics", "matplotlib", "xdg"):
             (cache_root / name).mkdir(parents=True, exist_ok=True)
@@ -127,7 +130,9 @@ class VideoDetector:
             self.capture = cv2.VideoCapture(source, backend)
             if not self.capture.isOpened():
                 raise RuntimeError(f"Unable to open video file: {source}")
+            self._configure_capture(cv2, self.capture)
             self.source_fps = self._read_capture_fps(cv2)
+            self.source_frame_count = self._read_capture_frame_count(cv2)
 
         elif self.config.source_type == "screen_region":
             if self.config.screen_region is None:
@@ -136,6 +141,7 @@ class VideoDetector:
 
             self.screen_capture = mss.mss()
             self.source_fps = None
+            self.source_frame_count = None
 
         else:
             raise ValueError(f"Unsupported source_type: {self.config.source_type}")
@@ -223,7 +229,7 @@ class VideoDetector:
         detections = self.track_frame(frame)
         return frame, detections
 
-    def close(self) -> None:
+    def close(self, clear_temp_cache: bool = False) -> None:
         if self.capture is not None:
             self.capture.release()
         if self.screen_capture is not None:
@@ -231,9 +237,45 @@ class VideoDetector:
         self.capture = None
         self.screen_capture = None
         self.source_fps = None
+        self.source_frame_count = None
+        self.frame_index = 0
+        if clear_temp_cache:
+            self.clear_temp_cache()
+
+    @staticmethod
+    def clear_temp_cache() -> None:
+        if CACHE_ROOT.exists():
+            shutil.rmtree(CACHE_ROOT, ignore_errors=True)
 
     def get_source_fps(self) -> float | None:
         return self.source_fps
+
+    def get_source_frame_count(self) -> int | None:
+        return self.source_frame_count
+
+    def get_current_frame_index(self) -> int:
+        return self.frame_index
+
+    def seek_video_frame(self, frame_index: int) -> bool:
+        if self.config.source_type != "video_file" or self.capture is None or self._cv2 is None:
+            return False
+        target_frame = max(0, int(frame_index))
+        if self.source_frame_count is not None:
+            target_frame = min(max(0, self.source_frame_count - 1), target_frame)
+        self.reset_tracker_state()
+        ok = self.capture.set(self._cv2.CAP_PROP_POS_FRAMES, target_frame)
+        if ok:
+            self.frame_index = target_frame
+        return bool(ok)
+
+    def reset_tracker_state(self) -> None:
+        trackers = getattr(self.model, "trackers", None)
+        if not trackers:
+            return
+        for tracker in trackers:
+            reset = getattr(tracker, "reset", None)
+            if callable(reset):
+                reset()
 
     def skip_video_frames(self, frame_count: int) -> int:
         if self.config.source_type != "video_file" or self.capture is None:
@@ -360,7 +402,7 @@ class VideoDetector:
         searched = "\n".join(f"- {candidate}" for candidate in candidates)
         raise FileNotFoundError(
             f"YOLO model not found: {model_path}\n"
-            "Put the model under code/model or choose it from Browse Model.\n"
+            "Put the model under code/model and click Refresh Models.\n"
             f"Searched:\n{searched}"
         )
 
@@ -401,6 +443,7 @@ class VideoDetector:
             capture = cv2.VideoCapture(index, backend)
             if capture.isOpened():
                 self.config.camera_index = index
+                self._configure_capture(cv2, capture)
                 self.source_fps = self._read_capture_fps(cv2, capture)
                 return capture
             capture.release()
@@ -414,3 +457,16 @@ class VideoDetector:
         if fps <= 1.0 or fps > 240.0:
             return None
         return fps
+
+    @staticmethod
+    def _configure_capture(cv2: Any, capture: Any) -> None:
+        capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    def _read_capture_frame_count(self, cv2: Any, capture: Any | None = None) -> int | None:
+        target = capture or self.capture
+        if target is None:
+            return None
+        frame_count = int(target.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        if frame_count <= 0:
+            return None
+        return frame_count

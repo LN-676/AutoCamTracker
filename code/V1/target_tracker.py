@@ -37,7 +37,7 @@ class SelectedTarget:
 
 @dataclass
 class TrackingConfig:
-    max_lost_frames: int = 15
+    max_lost_frames: int = 45
     reacquire_enabled: bool = True
 
 
