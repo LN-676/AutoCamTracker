@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 from time import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -43,6 +44,8 @@ class AppConfig:
     output_width: int = 640
     output_height: int = 360
     log_dir: Path = Path("outputs")
+    model_dir: Path = Path(__file__).resolve().parents[1] / "model"
+    default_model: str = "yolo11n.pt"
 
 
 class AutoCamTrackerApp:
@@ -68,10 +71,12 @@ class AutoCamTrackerApp:
         self.recording = False
         self.last_frame_time = time()
         self.fps = 0.0
+        self.model_options: dict[str, str] = {}
 
         self.before_image_ref = None
         self.after_image_ref = None
         self._build_ui()
+        self.refresh_model_options()
 
     def _build_ui(self) -> None:
         main = ttk.Frame(self.root, padding=10)
@@ -86,16 +91,21 @@ class AutoCamTrackerApp:
         ttk.Button(controls, text="Pause", command=self.pause).grid(row=0, column=1, padx=4)
         ttk.Button(controls, text="Stop", command=self.stop).grid(row=0, column=2, padx=4)
         ttk.Button(controls, text="Reset", command=self.reset_tracking).grid(row=0, column=3, padx=4)
-        ttk.Button(controls, text="Open Video", command=self.choose_video_file).grid(row=0, column=4, padx=4)
-        ttk.Button(controls, text="Clear Selection", command=self.clear_selection).grid(row=0, column=5, padx=4)
-        ttk.Button(controls, text="Auto One", command=self.auto_select_one).grid(row=0, column=6, padx=4)
-        ttk.Button(controls, text="Auto Multiple", command=self.auto_select_multiple).grid(row=0, column=7, padx=4)
-        ttk.Button(controls, text="Record", command=self.toggle_recording).grid(row=0, column=8, padx=4)
+        ttk.Button(controls, text="Browse Video", command=self.choose_video_file).grid(row=0, column=4, padx=4)
+        ttk.Button(controls, text="Select Screen Region", command=self.select_screen_region).grid(row=0, column=5, padx=4)
+        ttk.Button(controls, text="Clear Selection", command=self.clear_selection).grid(row=0, column=6, padx=4)
+        ttk.Button(controls, text="Auto One", command=self.auto_select_one).grid(row=0, column=7, padx=4)
+        ttk.Button(controls, text="Auto Multiple", command=self.auto_select_multiple).grid(row=0, column=8, padx=4)
+        ttk.Button(controls, text="Record", command=self.toggle_recording).grid(row=0, column=9, padx=4)
 
         self.source_var = tk.StringVar(value="webcam")
         self.tracker_var = tk.StringVar(value="botsort")
         self.selection_var = tk.StringVar(value="single")
         self.framing_var = tk.StringVar(value="medium")
+        self.model_var = tk.StringVar(value=self.config.default_model)
+        self.camera_index_var = tk.StringVar(value="0")
+        self.video_path_var = tk.StringVar(value="No video selected")
+        self.screen_region_var = tk.StringVar(value="No screen region selected")
 
         ttk.Label(controls, text="Input").grid(row=1, column=0, padx=4, pady=(8, 0))
         ttk.Combobox(
@@ -135,6 +145,31 @@ class AutoCamTrackerApp:
         framing_box.grid(row=1, column=7, padx=4, pady=(8, 0))
         framing_box.bind("<<ComboboxSelected>>", lambda _: self.apply_ui_config())
 
+        ttk.Label(controls, text="Camera").grid(row=1, column=8, padx=4, pady=(8, 0))
+        ttk.Combobox(
+            controls,
+            textvariable=self.camera_index_var,
+            values=["0", "1", "2", "3", "4"],
+            width=6,
+            state="readonly",
+        ).grid(row=1, column=9, padx=4, pady=(8, 0))
+        ttk.Button(controls, text="Test Camera", command=self.test_camera).grid(row=1, column=10, padx=4, pady=(8, 0))
+
+        ttk.Label(controls, text="Model").grid(row=2, column=0, padx=4, pady=(8, 0))
+        self.model_box = ttk.Combobox(
+            controls,
+            textvariable=self.model_var,
+            values=[],
+            width=42,
+            state="readonly",
+        )
+        self.model_box.grid(row=2, column=1, columnspan=4, padx=4, pady=(8, 0), sticky="ew")
+        ttk.Button(controls, text="Refresh Models", command=self.refresh_model_options).grid(row=2, column=5, padx=4, pady=(8, 0))
+        ttk.Button(controls, text="Browse Model", command=self.choose_model_file).grid(row=2, column=6, padx=4, pady=(8, 0))
+
+        ttk.Label(controls, textvariable=self.video_path_var).grid(row=3, column=0, columnspan=6, sticky="w", padx=4, pady=(8, 0))
+        ttk.Label(controls, textvariable=self.screen_region_var).grid(row=3, column=6, columnspan=5, sticky="w", padx=4, pady=(8, 0))
+
         views = ttk.Frame(main)
         views.grid(row=1, column=0, columnspan=2, sticky="nsew")
         views.columnconfigure(0, weight=1)
@@ -154,19 +189,32 @@ class AutoCamTrackerApp:
     def apply_ui_config(self) -> None:
         self.input_config.source_type = self.source_var.get()
         self.input_config.tracker_name = self.tracker_var.get()
+        self.input_config.model_path = self.model_options.get(
+            self.model_var.get(),
+            self.model_var.get() or self.config.default_model,
+        )
+        try:
+            self.input_config.camera_index = int(self.camera_index_var.get())
+        except ValueError:
+            self.input_config.camera_index = 0
         self.target_tracker.set_selection_mode(self.selection_var.get())
         self.reframer.set_framing_mode(self.framing_var.get())
 
     def start(self) -> None:
         try:
             self.apply_ui_config()
-            if self.detector is None:
-                self.detector = VideoDetector(self.input_config)
-                self.detector.load_model()
-                self.detector.open_source()
+            if self.detector is not None:
+                self.detector.close()
+            self.detector = VideoDetector(self.input_config)
+            self.detector.load_model()
+            self.detector.open_source()
             self.running = True
             self._loop()
         except Exception as exc:
+            self.running = False
+            if self.detector is not None:
+                self.detector.close()
+                self.detector = None
             messagebox.showerror("Start failed", str(exc))
 
     def pause(self) -> None:
@@ -193,6 +241,116 @@ class AutoCamTrackerApp:
         if path:
             self.source_var.set("video_file")
             self.input_config.video_path = path
+            self.video_path_var.set(f"Video: {path}")
+
+    def choose_model_file(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Choose YOLO model",
+            initialdir=str(self.config.model_dir) if self.config.model_dir.exists() else str(Path.cwd()),
+            filetypes=[
+                ("YOLO model files", "*.pt *.pth *.onnx *.engine *.mlpackage *.torchscript"),
+                ("All files", "*.*"),
+            ],
+        )
+        if path:
+            label = self._model_label(Path(path))
+            self.model_options[label] = path
+            self.model_box.configure(values=list(self.model_options.keys()))
+            self.model_var.set(label)
+
+    def refresh_model_options(self) -> None:
+        model_files = self._discover_model_files()
+        options = {self.config.default_model: self.config.default_model}
+        for path in model_files:
+            options[self._model_label(path)] = str(path)
+        self.model_options = options
+        if hasattr(self, "model_box"):
+            self.model_box.configure(values=list(self.model_options.keys()))
+        if self.model_var.get() not in self.model_options:
+            self.model_var.set(next(iter(self.model_options)))
+
+    def select_screen_region(self) -> None:
+        self.pause()
+        selector = tk.Toplevel(self.root)
+        selector.title("Select screen region")
+        selector.attributes("-fullscreen", True)
+        selector.attributes("-topmost", True)
+        selector.attributes("-alpha", 0.28)
+        selector.configure(bg="black")
+
+        canvas = tk.Canvas(selector, cursor="crosshair", bg="black", highlightthickness=0)
+        canvas.pack(fill="both", expand=True)
+        canvas.create_text(
+            30,
+            30,
+            anchor="nw",
+            text="Drag to select screen region. Press Esc to cancel.",
+            fill="white",
+            font=("Arial", 24),
+        )
+
+        state: dict[str, int | None] = {"start_x": None, "start_y": None, "rect": None}
+
+        def on_press(event) -> None:
+            state["start_x"] = event.x_root
+            state["start_y"] = event.y_root
+            if state["rect"] is not None:
+                canvas.delete(state["rect"])
+            state["rect"] = canvas.create_rectangle(
+                event.x,
+                event.y,
+                event.x,
+                event.y,
+                outline="yellow",
+                width=4,
+            )
+
+        def on_drag(event) -> None:
+            if state["rect"] is None or state["start_x"] is None or state["start_y"] is None:
+                return
+            local_start_x = state["start_x"] - selector.winfo_rootx()
+            local_start_y = state["start_y"] - selector.winfo_rooty()
+            canvas.coords(state["rect"], local_start_x, local_start_y, event.x, event.y)
+
+        def on_release(event) -> None:
+            if state["start_x"] is None or state["start_y"] is None:
+                selector.destroy()
+                return
+            x1 = int(min(state["start_x"], event.x_root))
+            y1 = int(min(state["start_y"], event.y_root))
+            x2 = int(max(state["start_x"], event.x_root))
+            y2 = int(max(state["start_y"], event.y_root))
+            width = max(1, x2 - x1)
+            height = max(1, y2 - y1)
+            self.input_config.screen_region = (x1, y1, width, height)
+            self.source_var.set("screen_region")
+            self.screen_region_var.set(f"Screen region: x={x1}, y={y1}, w={width}, h={height}")
+            selector.destroy()
+
+        selector.bind("<Escape>", lambda _: selector.destroy())
+        canvas.bind("<ButtonPress-1>", on_press)
+        canvas.bind("<B1-Motion>", on_drag)
+        canvas.bind("<ButtonRelease-1>", on_release)
+
+    def test_camera(self) -> None:
+        import cv2
+
+        try:
+            camera_index = int(self.camera_index_var.get())
+        except ValueError:
+            camera_index = 0
+        backend = cv2.CAP_AVFOUNDATION if sys.platform == "darwin" else cv2.CAP_ANY
+        capture = cv2.VideoCapture(camera_index, backend)
+        ok, _ = capture.read() if capture.isOpened() else (False, None)
+        capture.release()
+        if ok:
+            messagebox.showinfo("Camera test", f"Camera index {camera_index} opened successfully.")
+        else:
+            messagebox.showerror(
+                "Camera test failed",
+                "Unable to open camera. Check macOS camera permission, camera index, "
+                "and whether another app is using the camera.",
+            )
 
     def auto_select_one(self) -> None:
         candidates = self.store.rank_candidates(strategy="largest")
@@ -227,7 +385,8 @@ class AutoCamTrackerApp:
         self.fps = 1.0 / elapsed
         self.last_frame_time = now
 
-        self._update_images(frame, after_frame)
+        before_frame = self._draw_detections(frame, detections)
+        self._update_images(before_frame, after_frame)
         state = self.target_tracker.get_state()
         self.status_var.set(
             "Status: "
@@ -240,6 +399,43 @@ class AutoCamTrackerApp:
             messagebox.showwarning("Tracking failed", str(state["lost_alert"]))
 
         self.root.after(self.config.update_interval_ms, self._loop)
+
+    def _discover_model_files(self) -> list[Path]:
+        suffixes = {".pt", ".pth", ".onnx", ".engine", ".mlpackage", ".torchscript"}
+        if not self.config.model_dir.exists():
+            return []
+        return sorted(
+            path
+            for path in self.config.model_dir.rglob("*")
+            if path.is_file() and path.suffix.lower() in suffixes
+        )
+
+    def _model_label(self, path: Path) -> str:
+        try:
+            return str(path.relative_to(self.config.model_dir))
+        except ValueError:
+            return str(path)
+
+    def _draw_detections(self, frame, detections):
+        import cv2
+
+        annotated = frame.copy()
+        for detection in detections:
+            x1, y1, x2, y2 = [int(value) for value in detection.bbox]
+            label = f"id:{detection.track_id} {detection.class_name} {detection.confidence:.2f}"
+            color = (0, 220, 255) if detection.track_id in self.target_tracker.selected_track_ids else (80, 220, 80)
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(
+                annotated,
+                label,
+                (x1, max(20, y1 - 8)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                color,
+                2,
+                cv2.LINE_AA,
+            )
+        return annotated
 
     def _update_images(self, before_frame, after_frame) -> None:
         if Image is None or ImageTk is None:

@@ -13,6 +13,7 @@ recording file output.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import sys
 from time import time
 from typing import Any, Iterable, Literal
 
@@ -79,14 +80,21 @@ class VideoDetector:
             source: int | str
             if self.config.source_type == "webcam":
                 source = self.config.camera_index
+                backend = cv2.CAP_AVFOUNDATION if sys.platform == "darwin" else cv2.CAP_ANY
             else:
                 if not self.config.video_path:
                     raise ValueError("video_path is required for video_file input")
                 source = self.config.video_path
+                backend = cv2.CAP_ANY
 
-            self.capture = cv2.VideoCapture(source)
+            self.capture = cv2.VideoCapture(source, backend)
             if not self.capture.isOpened():
-                raise RuntimeError(f"Unable to open input source: {source}")
+                if self.config.source_type == "webcam":
+                    raise RuntimeError(
+                        "Unable to open MacBook camera. Check camera permission, "
+                        f"camera index {self.config.camera_index}, and whether another app is using it."
+                    )
+                raise RuntimeError(f"Unable to open video file: {source}")
 
         elif self.config.source_type == "screen_region":
             if self.config.screen_region is None:
