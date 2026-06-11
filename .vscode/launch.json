@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "AutoCamTracker V1",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/run_v1_app.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "AutoCamTracker V1 Self Test",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/code/V1/self_test.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ]
+}

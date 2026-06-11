@@ -4,7 +4,7 @@ Responsibilities:
 - Create the Tkinter desktop UI.
 - Wire together input, YOLO tracking, data store, target tracking, and reframe.
 - Show before and after views.
-- Expose controls for source, tracker, selection mode, framing mode, and recording.
+- Expose controls for source, tracker, framing mode, and recording.
 
 This file is intentionally a V1 integration scaffold. The core logic lives in
 the other four modules.
@@ -20,9 +20,10 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 try:
-    from PIL import Image, ImageTk
+    from PIL import Image, ImageGrab, ImageTk
 except ImportError:  # pragma: no cover
     Image = None
+    ImageGrab = None
     ImageTk = None
 
 try:
@@ -70,7 +71,9 @@ class AutoCamTrackerApp:
         self.running = False
         self.recording = False
         self.last_frame_time = time()
+        self.loop_started_at = time()
         self.fps = 0.0
+        self.skipped_frames = 0
         self.model_options: dict[str, str] = {}
 
         self.before_image_ref = None
@@ -87,22 +90,21 @@ class AutoCamTrackerApp:
         controls = ttk.Frame(main)
         controls.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
 
-        ttk.Button(controls, text="Start", command=self.start).grid(row=0, column=0, padx=4)
-        ttk.Button(controls, text="Pause", command=self.pause).grid(row=0, column=1, padx=4)
-        ttk.Button(controls, text="Stop", command=self.stop).grid(row=0, column=2, padx=4)
-        ttk.Button(controls, text="Reset", command=self.reset_tracking).grid(row=0, column=3, padx=4)
+        ttk.Button(controls, text="▶", width=4, command=self.start).grid(row=0, column=0, padx=4)
+        ttk.Button(controls, text="⏸", width=4, command=self.pause).grid(row=0, column=1, padx=4)
+        ttk.Button(controls, text="⏹", width=4, command=self.stop).grid(row=0, column=2, padx=4)
+        ttk.Button(controls, text="↺", width=4, command=self.reset_tracking).grid(row=0, column=3, padx=4)
         ttk.Button(controls, text="Browse Video", command=self.choose_video_file).grid(row=0, column=4, padx=4)
         ttk.Button(controls, text="Select Screen Region", command=self.select_screen_region).grid(row=0, column=5, padx=4)
         ttk.Button(controls, text="Clear Selection", command=self.clear_selection).grid(row=0, column=6, padx=4)
         ttk.Button(controls, text="Auto One", command=self.auto_select_one).grid(row=0, column=7, padx=4)
-        ttk.Button(controls, text="Auto Multiple", command=self.auto_select_multiple).grid(row=0, column=8, padx=4)
-        ttk.Button(controls, text="Record", command=self.toggle_recording).grid(row=0, column=9, padx=4)
+        ttk.Button(controls, text="Record", command=self.toggle_recording).grid(row=0, column=8, padx=4)
 
         self.source_var = tk.StringVar(value="webcam")
         self.tracker_var = tk.StringVar(value="botsort")
-        self.selection_var = tk.StringVar(value="single")
         self.framing_var = tk.StringVar(value="medium")
         self.model_var = tk.StringVar(value=self.config.default_model)
+        self.playback_speed_var = tk.StringVar(value="1x")
         self.camera_index_var = tk.StringVar(value="0")
         self.video_path_var = tk.StringVar(value="No video selected")
         self.screen_region_var = tk.StringVar(value="No screen region selected")
@@ -125,16 +127,7 @@ class AutoCamTrackerApp:
             state="readonly",
         ).grid(row=1, column=3, padx=4, pady=(8, 0))
 
-        ttk.Label(controls, text="Select").grid(row=1, column=4, padx=4, pady=(8, 0))
-        ttk.Combobox(
-            controls,
-            textvariable=self.selection_var,
-            values=["single", "multi"],
-            width=10,
-            state="readonly",
-        ).grid(row=1, column=5, padx=4, pady=(8, 0))
-
-        ttk.Label(controls, text="Framing").grid(row=1, column=6, padx=4, pady=(8, 0))
+        ttk.Label(controls, text="Framing").grid(row=1, column=4, padx=4, pady=(8, 0))
         framing_box = ttk.Combobox(
             controls,
             textvariable=self.framing_var,
@@ -142,18 +135,18 @@ class AutoCamTrackerApp:
             width=10,
             state="readonly",
         )
-        framing_box.grid(row=1, column=7, padx=4, pady=(8, 0))
+        framing_box.grid(row=1, column=5, padx=4, pady=(8, 0))
         framing_box.bind("<<ComboboxSelected>>", lambda _: self.apply_ui_config())
 
-        ttk.Label(controls, text="Camera").grid(row=1, column=8, padx=4, pady=(8, 0))
+        ttk.Label(controls, text="Camera").grid(row=1, column=6, padx=4, pady=(8, 0))
         ttk.Combobox(
             controls,
             textvariable=self.camera_index_var,
             values=["0", "1", "2", "3", "4"],
             width=6,
             state="readonly",
-        ).grid(row=1, column=9, padx=4, pady=(8, 0))
-        ttk.Button(controls, text="Test Camera", command=self.test_camera).grid(row=1, column=10, padx=4, pady=(8, 0))
+        ).grid(row=1, column=7, padx=4, pady=(8, 0))
+        ttk.Button(controls, text="Test Camera", command=self.test_camera).grid(row=1, column=8, padx=4, pady=(8, 0))
 
         ttk.Label(controls, text="Model").grid(row=2, column=0, padx=4, pady=(8, 0))
         self.model_box = ttk.Combobox(
@@ -166,6 +159,15 @@ class AutoCamTrackerApp:
         self.model_box.grid(row=2, column=1, columnspan=4, padx=4, pady=(8, 0), sticky="ew")
         ttk.Button(controls, text="Refresh Models", command=self.refresh_model_options).grid(row=2, column=5, padx=4, pady=(8, 0))
         ttk.Button(controls, text="Browse Model", command=self.choose_model_file).grid(row=2, column=6, padx=4, pady=(8, 0))
+
+        ttk.Label(controls, text="Speed").grid(row=2, column=7, padx=4, pady=(8, 0))
+        ttk.Combobox(
+            controls,
+            textvariable=self.playback_speed_var,
+            values=["0.25x", "0.5x", "1x", "1.25x", "1.5x"],
+            width=8,
+            state="readonly",
+        ).grid(row=2, column=8, padx=4, pady=(8, 0))
 
         ttk.Label(controls, textvariable=self.video_path_var).grid(row=3, column=0, columnspan=6, sticky="w", padx=4, pady=(8, 0))
         ttk.Label(controls, textvariable=self.screen_region_var).grid(row=3, column=6, columnspan=5, sticky="w", padx=4, pady=(8, 0))
@@ -197,11 +199,16 @@ class AutoCamTrackerApp:
             self.input_config.camera_index = int(self.camera_index_var.get())
         except ValueError:
             self.input_config.camera_index = 0
-        self.target_tracker.set_selection_mode(self.selection_var.get())
         self.reframer.set_framing_mode(self.framing_var.get())
 
     def start(self) -> None:
         try:
+            if self.detector is not None and not self.running:
+                self.running = True
+                self.last_frame_time = time()
+                self._loop()
+                return
+
             self.apply_ui_config()
             if self.detector is not None:
                 self.detector.close()
@@ -209,6 +216,8 @@ class AutoCamTrackerApp:
             self.detector.load_model()
             self.detector.open_source()
             self.running = True
+            self.last_frame_time = time()
+            self.skipped_frames = 0
             self._loop()
         except Exception as exc:
             self.running = False
@@ -271,15 +280,17 @@ class AutoCamTrackerApp:
 
     def select_screen_region(self) -> None:
         self.pause()
+        screenshot = self._capture_screen_selection_background()
         selector = tk.Toplevel(self.root)
         selector.title("Select screen region")
         selector.attributes("-fullscreen", True)
         selector.attributes("-topmost", True)
-        selector.attributes("-alpha", 0.28)
-        selector.configure(bg="black")
 
         canvas = tk.Canvas(selector, cursor="crosshair", bg="black", highlightthickness=0)
         canvas.pack(fill="both", expand=True)
+        if screenshot is not None:
+            selector._screen_selection_image = ImageTk.PhotoImage(screenshot)
+            canvas.create_image(0, 0, anchor="nw", image=selector._screen_selection_image)
         canvas.create_text(
             30,
             30,
@@ -332,6 +343,21 @@ class AutoCamTrackerApp:
         canvas.bind("<B1-Motion>", on_drag)
         canvas.bind("<ButtonRelease-1>", on_release)
 
+    def _capture_screen_selection_background(self):
+        if Image is None or ImageGrab is None:
+            return None
+
+        try:
+            screenshot = ImageGrab.grab()
+        except Exception:
+            return None
+
+        screen_width = max(1, self.root.winfo_screenwidth())
+        screen_height = max(1, self.root.winfo_screenheight())
+        screenshot = screenshot.resize((screen_width, screen_height))
+        overlay = Image.new("RGB", screenshot.size, (0, 0, 0))
+        return Image.blend(screenshot.convert("RGB"), overlay, 0.22)
+
     def test_camera(self) -> None:
         import cv2
 
@@ -356,10 +382,6 @@ class AutoCamTrackerApp:
         candidates = self.store.rank_candidates(strategy="largest")
         self.target_tracker.auto_select_one(candidates)
 
-    def auto_select_multiple(self) -> None:
-        candidates = self.store.rank_candidates(strategy="largest")
-        self.target_tracker.auto_select_multiple(candidates)
-
     def toggle_recording(self) -> None:
         self.recording = not self.recording
         messagebox.showinfo(
@@ -371,6 +393,7 @@ class AutoCamTrackerApp:
         if not self.running or self.detector is None:
             return
 
+        self.loop_started_at = time()
         frame, detections = self.detector.read_and_track()
         if frame is None:
             self.stop()
@@ -390,7 +413,9 @@ class AutoCamTrackerApp:
         state = self.target_tracker.get_state()
         self.status_var.set(
             "Status: "
-            f"{state['status']} | FPS: {self.fps:.1f} | "
+            f"{state['status']} | Display FPS: {self.fps:.1f} | "
+            f"Source: {self._source_fps_label()} | Speed: {self.playback_speed_var.get()} | "
+            f"Skipped: {self.skipped_frames} | "
             f"Candidates: {len(candidates)} | Selected: {state['selected_track_ids']} | "
             f"Crop: {framing_status.crop_window}"
         )
@@ -398,7 +423,53 @@ class AutoCamTrackerApp:
         if state.get("lost_alert"):
             messagebox.showwarning("Tracking failed", str(state["lost_alert"]))
 
-        self.root.after(self.config.update_interval_ms, self._loop)
+        self._drop_late_video_frames()
+        self.root.after(self._next_loop_delay_ms(), self._loop)
+
+    def _next_loop_delay_ms(self) -> int:
+        if self.detector is None or self.input_config.source_type != "video_file":
+            return self.config.update_interval_ms
+
+        source_fps = self.detector.get_source_fps()
+        if source_fps is None:
+            return self.config.update_interval_ms
+
+        target_interval_ms = 1000.0 / max(1.0, source_fps) / self._playback_speed()
+        elapsed_ms = (time() - self.loop_started_at) * 1000.0
+        return max(1, int(round(target_interval_ms - elapsed_ms)))
+
+    def _drop_late_video_frames(self) -> None:
+        if self.detector is None or self.input_config.source_type != "video_file":
+            return
+
+        source_fps = self.detector.get_source_fps()
+        if source_fps is None:
+            return
+
+        target_interval_ms = 1000.0 / max(1.0, source_fps) / self._playback_speed()
+        elapsed_ms = (time() - self.loop_started_at) * 1000.0
+        frames_due = int(elapsed_ms // max(1.0, target_interval_ms))
+        frames_to_skip = min(30, max(0, frames_due - 1))
+        if frames_to_skip <= 0:
+            return
+
+        self.skipped_frames += self.detector.skip_video_frames(frames_to_skip)
+
+    def _playback_speed(self) -> float:
+        value = self.playback_speed_var.get().strip().lower().replace("x", "")
+        try:
+            speed = float(value)
+        except ValueError:
+            return 1.0
+        return max(0.05, speed)
+
+    def _source_fps_label(self) -> str:
+        if self.detector is None:
+            return "--"
+        source_fps = self.detector.get_source_fps()
+        if source_fps is None:
+            return "--"
+        return f"{source_fps:.1f}"
 
     def _discover_model_files(self) -> list[Path]:
         suffixes = {".pt", ".pth", ".onnx", ".engine", ".mlpackage", ".torchscript"}

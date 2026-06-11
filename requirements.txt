@@ -1,0 +1,5 @@
+ultralytics==8.4.64
+filterpy==1.4.5
+mss==10.2.0
+opencv-python==4.13.0.92
+pillow==12.2.0

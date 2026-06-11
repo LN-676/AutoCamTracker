@@ -13,7 +13,10 @@ recording file output.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
+from pathlib import Path
 import sys
+import tempfile
 from time import time
 from typing import Any, Iterable, Literal
 
@@ -22,12 +25,22 @@ SourceType = Literal["webcam", "video_file", "screen_region"]
 TrackerName = Literal["botsort", "deepocsort"]
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+MODEL_DIR = PROJECT_ROOT / "code" / "model"
+
+
 TRACKER_CONFIGS: dict[TrackerName, str] = {
     "botsort": "botsort.yaml",
     "deepocsort": "deepocsort.yaml",
 }
 
 VEHICLE_CLASS_NAMES = {"car", "truck", "bus", "motorcycle"}
+
+
+try:
+    from tracker_adapter import DeepOcSortAdapter, TrackerInputDetection
+except ImportError:  # pragma: no cover
+    from .tracker_adapter import DeepOcSortAdapter, TrackerInputDetection
 
 
 @dataclass
@@ -62,15 +75,35 @@ class VideoDetector:
     def __init__(self, config: InputConfig) -> None:
         self.config = config
         self.model: Any | None = None
+        self.tracker_adapter: DeepOcSortAdapter | None = None
         self.capture: Any | None = None
         self.screen_capture: Any | None = None
+        self.source_fps: float | None = None
         self.frame_index = 0
         self._cv2 = None
 
     def load_model(self) -> None:
+        cache_root = Path(tempfile.gettempdir()) / "autocamtracker-cache"
+        cache_root.mkdir(parents=True, exist_ok=True)
+        for name in ("ultralytics", "matplotlib", "xdg"):
+            (cache_root / name).mkdir(parents=True, exist_ok=True)
+        os.environ.setdefault("YOLO_CONFIG_DIR", str(cache_root / "ultralytics"))
+        os.environ.setdefault("MPLCONFIGDIR", str(cache_root / "matplotlib"))
+        os.environ.setdefault("XDG_CACHE_HOME", str(cache_root / "xdg"))
+
         from ultralytics import YOLO
 
-        self.model = YOLO(self.config.model_path)
+        resolved_model_path = self._resolve_model_path(self.config.model_path)
+        self.config.model_path = str(resolved_model_path)
+        self.model = YOLO(str(resolved_model_path))
+        if self.config.tracker_name == "deepocsort":
+            self.tracker_adapter = DeepOcSortAdapter(
+                model_dir=MODEL_DIR,
+                det_thresh=self.config.confidence_threshold,
+                iou_threshold=0.3,
+            )
+        else:
+            self.tracker_adapter = None
 
     def open_source(self) -> None:
         if self.config.source_type in {"webcam", "video_file"}:
@@ -81,20 +114,20 @@ class VideoDetector:
             if self.config.source_type == "webcam":
                 source = self.config.camera_index
                 backend = cv2.CAP_AVFOUNDATION if sys.platform == "darwin" else cv2.CAP_ANY
+                self.capture = self._open_camera_capture(cv2, backend)
+                if self.capture is None:
+                    raise RuntimeError(self._camera_error_message(self.config.camera_index))
+                return
             else:
                 if not self.config.video_path:
                     raise ValueError("video_path is required for video_file input")
-                source = self.config.video_path
+                source = str(self._resolve_input_path(self.config.video_path))
                 backend = cv2.CAP_ANY
 
             self.capture = cv2.VideoCapture(source, backend)
             if not self.capture.isOpened():
-                if self.config.source_type == "webcam":
-                    raise RuntimeError(
-                        "Unable to open MacBook camera. Check camera permission, "
-                        f"camera index {self.config.camera_index}, and whether another app is using it."
-                    )
                 raise RuntimeError(f"Unable to open video file: {source}")
+            self.source_fps = self._read_capture_fps(cv2)
 
         elif self.config.source_type == "screen_region":
             if self.config.screen_region is None:
@@ -102,6 +135,7 @@ class VideoDetector:
             import mss
 
             self.screen_capture = mss.mss()
+            self.source_fps = None
 
         else:
             raise ValueError(f"Unsupported source_type: {self.config.source_type}")
@@ -137,6 +171,15 @@ class VideoDetector:
         if self.model is None:
             raise RuntimeError("YOLO model is not loaded")
 
+        if self.config.tracker_name == "deepocsort":
+            results = self.model.predict(
+                frame,
+                conf=self.config.confidence_threshold,
+                iou=self.config.iou_threshold,
+                verbose=False,
+            )
+            return self._track_with_deepocsort(results)
+
         tracker_config = TRACKER_CONFIGS[self.config.tracker_name]
         results = self.model.track(
             frame,
@@ -147,6 +190,31 @@ class VideoDetector:
             verbose=False,
         )
         return self._parse_results(results)
+
+    def _track_with_deepocsort(self, results: Iterable[Any]) -> list[TrackedDetection]:
+        if self.tracker_adapter is None:
+            raise RuntimeError("Deep OC-SORT tracker is not initialized")
+
+        raw_detections = self._parse_prediction_results(results)
+        tracked = self.tracker_adapter.update(raw_detections)
+        timestamp = time()
+        return [
+            TrackedDetection(
+                track_id=detection.track_id,
+                bbox=detection.bbox,
+                class_id=detection.class_id,
+                class_name=detection.class_name,
+                confidence=detection.confidence,
+                center=(
+                    (detection.bbox[0] + detection.bbox[2]) / 2.0,
+                    (detection.bbox[1] + detection.bbox[3]) / 2.0,
+                ),
+                frame_index=self.frame_index,
+                timestamp=timestamp,
+                tracker_name=self.config.tracker_name,
+            )
+            for detection in tracked
+        ]
 
     def read_and_track(self) -> tuple[Any | None, list[TrackedDetection]]:
         frame = self.read_frame()
@@ -160,6 +228,24 @@ class VideoDetector:
             self.capture.release()
         if self.screen_capture is not None:
             self.screen_capture.close()
+        self.capture = None
+        self.screen_capture = None
+        self.source_fps = None
+
+    def get_source_fps(self) -> float | None:
+        return self.source_fps
+
+    def skip_video_frames(self, frame_count: int) -> int:
+        if self.config.source_type != "video_file" or self.capture is None:
+            return 0
+
+        skipped = 0
+        for _ in range(max(0, frame_count)):
+            if not self.capture.grab():
+                break
+            self.frame_index += 1
+            skipped += 1
+        return skipped
 
     def _parse_results(self, results: Iterable[Any]) -> list[TrackedDetection]:
         parsed: list[TrackedDetection] = []
@@ -204,6 +290,41 @@ class VideoDetector:
 
         return parsed
 
+    def _parse_prediction_results(self, results: Iterable[Any]) -> list[TrackerInputDetection]:
+        parsed: list[TrackerInputDetection] = []
+
+        for result in results:
+            names = getattr(result, "names", {}) or {}
+            boxes = getattr(result, "boxes", None)
+            if boxes is None:
+                continue
+
+            xyxy = self._to_list(getattr(boxes, "xyxy", []))
+            cls_values = self._to_list(getattr(boxes, "cls", []))
+            conf_values = self._to_list(getattr(boxes, "conf", []))
+
+            for index, bbox_values in enumerate(xyxy):
+                class_id = int(cls_values[index]) if index < len(cls_values) else -1
+                class_name = str(names.get(class_id, class_id))
+                confidence = float(conf_values[index]) if index < len(conf_values) else 0.0
+
+                if self.config.vehicle_classes_only and class_name not in VEHICLE_CLASS_NAMES:
+                    continue
+                if confidence < self.config.confidence_threshold:
+                    continue
+
+                x1, y1, x2, y2 = [float(value) for value in bbox_values]
+                parsed.append(
+                    TrackerInputDetection(
+                        bbox=(x1, y1, x2, y2),
+                        class_id=class_id,
+                        class_name=class_name,
+                        confidence=confidence,
+                    )
+                )
+
+        return parsed
+
     @staticmethod
     def _to_list(value: Any) -> list[Any]:
         if value is None:
@@ -215,3 +336,81 @@ class VideoDetector:
         if hasattr(value, "tolist"):
             return value.tolist()
         return list(value)
+
+    @staticmethod
+    def _resolve_model_path(model_path: str) -> Path:
+        path = Path(model_path).expanduser()
+        candidates = []
+        if path.is_absolute():
+            candidates.append(path)
+        else:
+            candidates.extend(
+                [
+                    MODEL_DIR / path,
+                    PROJECT_ROOT / path,
+                    Path.cwd() / path,
+                    path,
+                ]
+            )
+
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate.resolve()
+
+        searched = "\n".join(f"- {candidate}" for candidate in candidates)
+        raise FileNotFoundError(
+            f"YOLO model not found: {model_path}\n"
+            "Put the model under code/model or choose it from Browse Model.\n"
+            f"Searched:\n{searched}"
+        )
+
+    @staticmethod
+    def _resolve_input_path(input_path: str) -> Path:
+        path = Path(input_path).expanduser()
+        if path.is_absolute():
+            return path
+        candidates = [PROJECT_ROOT / path, Path.cwd() / path, path]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate.resolve()
+        return PROJECT_ROOT / path
+
+    @staticmethod
+    def _camera_error_message(camera_index: int) -> str:
+        mac_hint = ""
+        if sys.platform == "darwin":
+            mac_hint = (
+                "\n\nmacOS permission fix:\n"
+                "1. Open System Settings > Privacy & Security > Camera.\n"
+                "2. Enable Camera permission for Visual Studio Code, Terminal, "
+                "or the app that launched Python.\n"
+                "3. Quit and reopen VSCode/Terminal, then run again."
+            )
+        return (
+            "Unable to open MacBook camera. "
+            f"Camera index {camera_index} and fallback indexes 0-4 are not available, blocked by permission, "
+            "or currently used by another app."
+            f"{mac_hint}"
+        )
+
+    def _open_camera_capture(self, cv2: Any, backend: int) -> Any | None:
+        indexes = [self.config.camera_index]
+        indexes.extend(index for index in range(5) if index != self.config.camera_index)
+
+        for index in indexes:
+            capture = cv2.VideoCapture(index, backend)
+            if capture.isOpened():
+                self.config.camera_index = index
+                self.source_fps = self._read_capture_fps(cv2, capture)
+                return capture
+            capture.release()
+        return None
+
+    def _read_capture_fps(self, cv2: Any, capture: Any | None = None) -> float | None:
+        target = capture or self.capture
+        if target is None:
+            return None
+        fps = float(target.get(cv2.CAP_PROP_FPS) or 0.0)
+        if fps <= 1.0 or fps > 240.0:
+            return None
+        return fps

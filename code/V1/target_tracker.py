@@ -2,8 +2,8 @@
 
 Responsibilities:
 - Manage selected track IDs.
-- Support single-select and multi-select.
-- Support auto-select one or multiple vehicle candidates.
+- Support single-target selection.
+- Support auto-selecting one vehicle candidate.
 - Detect target lost state and reset to selectable mode when needed.
 
 This module uses track_id as the identity source. It should not run YOLO or
@@ -21,7 +21,6 @@ except ImportError:  # pragma: no cover
     from .detection_store import DetectionStore, VehicleCandidate
 
 
-SelectionMode = Literal["single", "multi"]
 TrackingStatus = Literal["idle", "tracking", "lost", "failed"]
 
 
@@ -38,10 +37,8 @@ class SelectedTarget:
 
 @dataclass
 class TrackingConfig:
-    selection_mode: SelectionMode = "single"
     max_lost_frames: int = 15
     reacquire_enabled: bool = True
-    auto_select_count: int = 2
 
 
 class TargetTracker:
@@ -54,19 +51,8 @@ class TargetTracker:
         self.status: TrackingStatus = "idle"
         self.lost_alert: str | None = None
 
-    def set_selection_mode(self, mode: SelectionMode) -> None:
-        self.config.selection_mode = mode
-        if mode == "single" and len(self.selected_track_ids) > 1:
-            self.selected_track_ids = self.selected_track_ids[:1]
-
     def select_track(self, track_id: int) -> None:
-        if self.config.selection_mode == "single":
-            self.selected_track_ids = [track_id]
-        else:
-            if track_id in self.selected_track_ids:
-                self.selected_track_ids.remove(track_id)
-            else:
-                self.selected_track_ids.append(track_id)
+        self.selected_track_ids = [track_id]
         self.lost_alert = None
         self.status = "tracking" if self.selected_track_ids else "idle"
 
@@ -82,12 +68,6 @@ class TargetTracker:
             return
         self.selected_track_ids = [candidates[0].track_id]
         self.status = "tracking"
-        self.lost_alert = None
-
-    def auto_select_multiple(self, candidates: list[VehicleCandidate]) -> None:
-        count = max(1, self.config.auto_select_count)
-        self.selected_track_ids = [candidate.track_id for candidate in candidates[:count]]
-        self.status = "tracking" if self.selected_track_ids else "idle"
         self.lost_alert = None
 
     def update_from_store(self, store: DetectionStore) -> list[SelectedTarget]:
