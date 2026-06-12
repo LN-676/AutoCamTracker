@@ -276,6 +276,10 @@ class VideoDetector:
         return bool(ok)
 
     def reset_tracker_state(self) -> None:
+        if self.tracker_adapter is not None:
+            reset_adapter = getattr(self.tracker_adapter, "reset", None)
+            if callable(reset_adapter):
+                reset_adapter()
         trackers = getattr(self.model, "trackers", None)
         if not trackers:
             return

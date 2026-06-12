@@ -29,13 +29,19 @@ except ImportError:  # pragma: no cover
 try:
     from video_detector import InputConfig, VideoDetector
     from detection_store import DetectionStore
-    from target_tracker import TargetTracker, TrackingConfig
+    from frame_data import FrameData
+    from identity_manager import GlobalIdentityManager
+    from pipeline_processor import PipelineProcessor
     from reframer import FramingConfig, Reframer
+    from scene_cut import SceneCutDetector
 except ImportError:  # pragma: no cover
     from .video_detector import InputConfig, VideoDetector
     from .detection_store import DetectionStore
-    from .target_tracker import TargetTracker, TrackingConfig
+    from .frame_data import FrameData
+    from .identity_manager import GlobalIdentityManager
+    from .pipeline_processor import PipelineProcessor
     from .reframer import FramingConfig, Reframer
+    from .scene_cut import SceneCutDetector
 
 
 @dataclass
@@ -61,12 +67,19 @@ class AutoCamTrackerApp:
         self.input_config = InputConfig()
         self.detector: VideoDetector | None = None
         self.store = DetectionStore()
-        self.target_tracker = TargetTracker(TrackingConfig())
+        self.identity_manager = GlobalIdentityManager()
+        self.scene_cut_detector = SceneCutDetector()
         self.reframer = Reframer(
             FramingConfig(
                 output_width=self.config.output_width,
                 output_height=self.config.output_height,
             )
+        )
+        self.pipeline = PipelineProcessor(
+            store=self.store,
+            identity_manager=self.identity_manager,
+            scene_cut_detector=self.scene_cut_detector,
+            reframer=self.reframer,
         )
 
         self.running = False
@@ -75,9 +88,12 @@ class AutoCamTrackerApp:
         self.loop_started_at = time()
         self.fps = 0.0
         self.skipped_frames = 0
+        self.last_inference_time_ms = 0.0
         self.model_options: dict[str, str] = {}
         self.active_input_signature: tuple[object, ...] | None = None
         self.last_frame_shape: tuple[int, int, int] | tuple[int, int] | None = None
+        self.last_raw_frame = None
+        self.current_frame_data: FrameData | None = None
         self.display_width = self.config.output_width
         self.display_height = self.config.output_height
         self.rendered_image_width = self.display_width
@@ -326,7 +342,7 @@ class AutoCamTrackerApp:
         self._reset_runtime_state()
 
     def clear_selection(self) -> None:
-        self.target_tracker.clear_selection()
+        self.identity_manager.reset()
 
     def choose_video_file(self) -> None:
         path = filedialog.askopenfilename(
@@ -363,9 +379,13 @@ class AutoCamTrackerApp:
         self.pause()
         self._clear_screen_region_selection()
         screenshot = self._capture_screen_selection_background()
+        screen_width = max(1, self.root.winfo_screenwidth())
+        screen_height = max(1, self.root.winfo_screenheight())
         selector = tk.Toplevel(self.root)
+        selector.withdraw()
         selector.title("Select screen region")
-        selector.attributes("-fullscreen", True)
+        selector.overrideredirect(True)
+        selector.geometry(f"{screen_width}x{screen_height}+0+0")
         selector.attributes("-topmost", True)
 
         canvas = tk.Canvas(selector, cursor="crosshair", bg="black", highlightthickness=0)
@@ -424,6 +444,9 @@ class AutoCamTrackerApp:
         canvas.bind("<ButtonPress-1>", on_press)
         canvas.bind("<B1-Motion>", on_drag)
         canvas.bind("<ButtonRelease-1>", on_release)
+        selector.deiconify()
+        selector.lift()
+        selector.focus_force()
 
     def _capture_screen_selection_background(self):
         if Image is None or ImageGrab is None:
@@ -442,7 +465,14 @@ class AutoCamTrackerApp:
 
     def auto_select_one(self) -> None:
         candidates = self.store.rank_candidates(self.last_frame_shape, strategy="stable")
-        self.target_tracker.auto_select_one(candidates)
+        if not candidates or self.last_raw_frame is None:
+            self.identity_manager.reset()
+            return
+        detection = self._detection_for_track(candidates[0].track_id)
+        if detection is None:
+            self.identity_manager.reset()
+            return
+        self.identity_manager.select_detection(detection, self.last_raw_frame)
 
     def apply_view_size(self) -> None:
         width_limit = self._parse_dimension(self.view_width_var.get(), self.display_width)
@@ -476,7 +506,8 @@ class AutoCamTrackerApp:
             return
 
         self.store.reset()
-        self.target_tracker.clear_selection()
+        self.identity_manager.reset()
+        self.scene_cut_detector.reset()
         self.reframer.reset()
         self.skipped_frames = 0
         self._render_current_video_frame()
@@ -498,9 +529,16 @@ class AutoCamTrackerApp:
             self.status_var.set("Status: no tracked vehicle at clicked point")
             return
 
-        self.target_tracker.select_track(candidate.track_id)
-        self.target_tracker.update_from_store(self.store)
-        self.status_var.set(f"Status: selected track id {candidate.track_id}")
+        detection = self._detection_for_track(candidate.track_id)
+        if detection is None or self.last_raw_frame is None:
+            self.status_var.set("Status: selected candidate is no longer visible")
+            return
+
+        identity = self.identity_manager.select_detection(detection, self.last_raw_frame)
+        self.status_var.set(
+            f"Status: selected global id {identity.global_vehicle_id} "
+            f"(local track {candidate.track_id})"
+        )
 
     def toggle_recording(self) -> None:
         self.recording = not self.recording
@@ -514,43 +552,55 @@ class AutoCamTrackerApp:
             return
 
         self.loop_started_at = time()
+        inference_started_at = time()
         frame, detections = self.detector.read_and_track()
+        self.last_inference_time_ms = (time() - inference_started_at) * 1000.0
         if frame is None:
             self.stop()
             return
 
-        candidates, framing_status = self._process_frame(frame, detections)
+        frame_data = self._process_frame(frame, detections, self.last_inference_time_ms)
         now = time()
         elapsed = max(1e-6, now - self.last_frame_time)
         self.fps = 1.0 / elapsed
         self.last_frame_time = now
+        frame_data.display_fps = self.fps
+        frame_data.source_fps = self.detector.get_source_fps()
+        frame_data.skipped_frames = self.skipped_frames
 
-        state = self.target_tracker.get_state()
         self.status_var.set(
             "Status: "
-            f"{state['status']} | Display FPS: {self.fps:.1f} | "
+            f"{frame_data.tracking_status} | Display FPS: {self.fps:.1f} | "
             f"Source: {self._source_fps_label()} | Speed: {self.playback_speed_var.get()} | "
             f"Skipped: {self.skipped_frames} | "
-            f"Candidates: {len(candidates)} | Selected: {state['selected_track_ids']} | "
-            f"Crop: {framing_status.crop_window}"
+            f"Candidates: {len(frame_data.candidates)} | "
+            f"GID: {frame_data.selected_global_vehicle_id or '--'} | "
+            f"LID: {frame_data.selected_local_track_id if frame_data.selected_local_track_id is not None else '--'} | "
+            f"Lost: {frame_data.lost_frames} | ReID: {frame_data.reacquire_score:.2f} | "
+            f"Cut: {'yes' if frame_data.camera_cut_detected else 'no'} | "
+            f"Crop: {frame_data.framing_status.crop_window}"
         )
-
-        if state.get("lost_alert"):
-            messagebox.showwarning("Tracking failed", str(state["lost_alert"]))
 
         self._drop_late_video_frames()
         self._sync_timeline_from_detector()
         self.root.after(self._next_loop_delay_ms(), self._loop)
 
-    def _process_frame(self, frame, detections):
+    def _process_frame(self, frame, detections, inference_time_ms: float = 0.0) -> FrameData:
         self.last_frame_shape = frame.shape
+        self.last_raw_frame = frame
         self._sync_reframer_to_source_size(frame.shape)
-        candidates = self.store.update(detections, frame.shape)
-        selected_targets = self.target_tracker.update_from_store(self.store)
-        after_frame, framing_status = self.reframer.render(frame, selected_targets)
-        before_frame = self._draw_detections(frame, detections)
-        self._update_images(before_frame, after_frame)
-        return candidates, framing_status
+        frame_data = self.pipeline.process(
+            frame=frame,
+            detections=detections,
+            draw_detections=self._draw_detections,
+            reset_tracker_state=self.detector.reset_tracker_state if self.detector is not None else None,
+            inference_time_ms=inference_time_ms,
+            source_fps=self.detector.get_source_fps() if self.detector is not None else None,
+            skipped_frames=self.skipped_frames,
+        )
+        self._update_images(frame_data.before_frame, frame_data.after_frame)
+        self.current_frame_data = frame_data
+        return frame_data
 
     def _render_current_video_frame(self) -> None:
         if self.detector is None:
@@ -558,7 +608,7 @@ class AutoCamTrackerApp:
         frame, detections = self.detector.read_and_track()
         if frame is None:
             return
-        self._process_frame(frame, detections)
+        self._process_frame(frame, detections, self.last_inference_time_ms)
         self._sync_timeline_from_detector()
 
     def _next_loop_delay_ms(self) -> int:
@@ -633,10 +683,10 @@ class AutoCamTrackerApp:
         )
 
     def _reset_runtime_state(self) -> None:
-        self.store.reset()
-        self.target_tracker.clear_selection()
-        self.reframer.reset()
+        self.pipeline.reset()
         self.last_frame_shape = None
+        self.last_raw_frame = None
+        self.current_frame_data = None
         self.skipped_frames = 0
 
     def _clear_screen_region_selection(self) -> None:
@@ -756,14 +806,22 @@ class AutoCamTrackerApp:
         value = self.video_url_var.get().strip()
         return value or None
 
+    def _detection_for_track(self, track_id: int):
+        for detection in self.store.current_detections:
+            if detection.track_id == track_id:
+                return detection
+        return None
+
     def _draw_detections(self, frame, detections):
         import cv2
 
         annotated = frame.copy()
         for detection in detections:
             x1, y1, x2, y2 = [int(value) for value in detection.bbox]
-            label = f"id:{detection.track_id} {detection.class_name} {detection.confidence:.2f}"
-            color = (0, 220, 255) if detection.track_id in self.target_tracker.selected_track_ids else (80, 220, 80)
+            global_id = self.identity_manager.global_id_for_detection(detection)
+            id_label = f"g:{global_id} l:{detection.track_id}" if global_id else f"id:{detection.track_id}"
+            label = f"{id_label} {detection.class_name} {detection.confidence:.2f}"
+            color = (0, 220, 255) if global_id else (80, 220, 80)
             cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3)
             font_face = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = cv2.getFontScaleFromHeight(font_face, 20, 2)

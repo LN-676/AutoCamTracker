@@ -52,6 +52,11 @@ class DeepOcSortAdapter:
         if repo_root_text not in sys.path:
             sys.path.insert(0, repo_root_text)
 
+        self.det_thresh = det_thresh
+        self.max_age = max_age
+        self.min_hits = min_hits
+        self.iou_threshold = iou_threshold
+        self.use_byte = True
         cache_root = Path(tempfile.gettempdir()) / "autocamtracker-cache"
         cache_root.mkdir(parents=True, exist_ok=True)
         os.environ.setdefault("MPLCONFIGDIR", str(cache_root / "matplotlib"))
@@ -59,12 +64,19 @@ class DeepOcSortAdapter:
 
         from trackers.ocsort_tracker.ocsort import OCSort
 
-        self.tracker = OCSort(
-            det_thresh=det_thresh,
-            max_age=max_age,
-            min_hits=min_hits,
-            iou_threshold=iou_threshold,
-            use_byte=True,
+        self._tracker_cls = OCSort
+        self.tracker = self._create_tracker()
+
+    def reset(self) -> None:
+        self.tracker = self._create_tracker()
+
+    def _create_tracker(self):
+        return self._tracker_cls(
+            det_thresh=self.det_thresh,
+            max_age=self.max_age,
+            min_hits=self.min_hits,
+            iou_threshold=self.iou_threshold,
+            use_byte=self.use_byte,
         )
 
     def update(self, detections: list[TrackerInputDetection]) -> list[TrackerOutputDetection]:

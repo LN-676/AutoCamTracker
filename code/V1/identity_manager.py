@@ -1,0 +1,327 @@
+"""Global vehicle identity and reacquire logic for AutoCamTracker V1.
+
+V1 tracker IDs are short-lived. This module keeps the product-level selected
+vehicle identity stable when the local tracker drops the target, changes IDs,
+or a camera cut resets tracker state.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+try:
+    from target_tracker import SelectedTarget
+    from video_detector import TrackedDetection
+except ImportError:  # pragma: no cover
+    from .target_tracker import SelectedTarget
+    from .video_detector import TrackedDetection
+
+
+@dataclass
+class VehicleIdentity:
+    global_vehicle_id: int
+    last_track_id: int | None
+    class_name: str
+    confidence: float
+    last_bbox: tuple[float, float, float, float]
+    last_center: tuple[float, float]
+    last_frame_index: int
+    last_seen_timestamp: float
+    color_signature: object | None = None
+    lost_frames: int = 0
+    status: str = "tracking"
+    track_aliases: list[int] = field(default_factory=list)
+
+
+class ReacquireEngine:
+    """Scores current detections against the selected global identity."""
+
+    def __init__(self, min_score: float = 0.62, margin: float = 0.08, confirm_frames: int = 2) -> None:
+        self.min_score = min_score
+        self.margin = margin
+        self.confirm_frames = confirm_frames
+        self._pending_key: int | None = None
+        self._pending_count = 0
+
+    def reset_pending(self) -> None:
+        self._pending_key = None
+        self._pending_count = 0
+
+    def color_signature(self, frame, bbox: tuple[float, float, float, float]):
+        import cv2
+
+        x1, y1, x2, y2 = self._clamp_bbox(bbox, frame.shape[1], frame.shape[0])
+        if x2 - x1 <= 1 or y2 - y1 <= 1:
+            return None
+        crop = frame[y1:y2, x1:x2]
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        hist = cv2.calcHist([hsv], [0, 1], None, [24, 16], [0, 180, 0, 256])
+        cv2.normalize(hist, hist, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+        return hist.flatten().astype("float32")
+
+    def choose(
+        self,
+        identity: VehicleIdentity,
+        detections: list[TrackedDetection],
+        frame,
+    ) -> tuple[TrackedDetection | None, float]:
+        if not detections:
+            self.reset_pending()
+            return None, 0.0
+
+        scored = [(self._score(identity, detection, frame), detection) for detection in detections]
+        scored.sort(key=lambda item: item[0], reverse=True)
+        best_score, best = scored[0]
+        second_score = scored[1][0] if len(scored) > 1 else 0.0
+
+        if best_score < self.min_score or best_score - second_score < self.margin:
+            self.reset_pending()
+            return None, best_score
+
+        pending_key = best.track_id if best.track_id is not None else best.frame_index
+        if pending_key == self._pending_key:
+            self._pending_count += 1
+        else:
+            self._pending_key = pending_key
+            self._pending_count = 1
+
+        if self._pending_count >= self.confirm_frames:
+            self.reset_pending()
+            return best, best_score
+        return None, best_score
+
+    def _score(self, identity: VehicleIdentity, detection: TrackedDetection, frame) -> float:
+        tracker_match = (
+            1.0
+            if detection.track_id is not None and detection.track_id == identity.last_track_id
+            else 0.0
+        )
+        color = self._color_similarity(identity, detection, frame)
+        size = self._size_similarity(identity.last_bbox, detection.bbox)
+        motion = self._motion_similarity(identity.last_center, detection.center, frame.shape[1], frame.shape[0])
+        confidence = max(0.0, min(1.0, detection.confidence))
+        class_match = 1.0 if detection.class_name == identity.class_name else 0.0
+        return (
+            0.34 * tracker_match
+            + 0.24 * color
+            + 0.14 * size
+            + 0.12 * motion
+            + 0.10 * confidence
+            + 0.06 * class_match
+        )
+
+    def _color_similarity(self, identity: VehicleIdentity, detection: TrackedDetection, frame) -> float:
+        import cv2
+
+        if identity.color_signature is None:
+            return 0.0
+        signature = self.color_signature(frame, detection.bbox)
+        if signature is None:
+            return 0.0
+        score = cv2.compareHist(identity.color_signature, signature, cv2.HISTCMP_CORREL)
+        return float(max(0.0, min(1.0, score)))
+
+    @staticmethod
+    def _size_similarity(
+        first: tuple[float, float, float, float],
+        second: tuple[float, float, float, float],
+    ) -> float:
+        first_w = max(1.0, first[2] - first[0])
+        first_h = max(1.0, first[3] - first[1])
+        second_w = max(1.0, second[2] - second[0])
+        second_h = max(1.0, second[3] - second[1])
+        first_area = first_w * first_h
+        second_area = second_w * second_h
+        area = min(first_area, second_area) / max(first_area, second_area)
+        first_aspect = first_w / first_h
+        second_aspect = second_w / second_h
+        aspect = min(first_aspect, second_aspect) / max(first_aspect, second_aspect)
+        return float(0.7 * area + 0.3 * aspect)
+
+    @staticmethod
+    def _motion_similarity(
+        previous: tuple[float, float],
+        current: tuple[float, float],
+        frame_w: int,
+        frame_h: int,
+    ) -> float:
+        diagonal = max(1.0, (frame_w**2 + frame_h**2) ** 0.5)
+        distance = ((previous[0] - current[0]) ** 2 + (previous[1] - current[1]) ** 2) ** 0.5
+        return float(max(0.0, 1.0 - distance / (0.6 * diagonal)))
+
+    @staticmethod
+    def _clamp_bbox(
+        bbox: tuple[float, float, float, float],
+        frame_w: int,
+        frame_h: int,
+    ) -> tuple[int, int, int, int]:
+        x1, y1, x2, y2 = bbox
+        left = max(0, min(frame_w - 1, int(round(x1))))
+        top = max(0, min(frame_h - 1, int(round(y1))))
+        right = max(left + 1, min(frame_w, int(round(x2))))
+        bottom = max(top + 1, min(frame_h, int(round(y2))))
+        return left, top, right, bottom
+
+
+class GlobalIdentityManager:
+    """Keeps the selected global vehicle independent from local tracker IDs."""
+
+    def __init__(self, max_lost_frames: int = 150, searching_after_frames: int = 5) -> None:
+        self.max_lost_frames = max_lost_frames
+        self.searching_after_frames = searching_after_frames
+        self.next_global_vehicle_id = 1
+        self.selected_identity: VehicleIdentity | None = None
+        self.reacquire = ReacquireEngine()
+        self.status = "idle"
+        self.last_reacquire_score = 0.0
+        self.camera_cut_seen = False
+
+    @property
+    def selected_global_vehicle_id(self) -> int | None:
+        return self.selected_identity.global_vehicle_id if self.selected_identity is not None else None
+
+    @property
+    def selected_local_track_id(self) -> int | None:
+        return self.selected_identity.last_track_id if self.selected_identity is not None else None
+
+    @property
+    def lost_frames(self) -> int:
+        return self.selected_identity.lost_frames if self.selected_identity is not None else 0
+
+    def reset(self) -> None:
+        self.selected_identity = None
+        self.status = "idle"
+        self.last_reacquire_score = 0.0
+        self.camera_cut_seen = False
+        self.reacquire.reset_pending()
+
+    def select_detection(self, detection: TrackedDetection, frame) -> VehicleIdentity:
+        identity = VehicleIdentity(
+            global_vehicle_id=self.next_global_vehicle_id,
+            last_track_id=detection.track_id,
+            class_name=detection.class_name,
+            confidence=detection.confidence,
+            last_bbox=detection.bbox,
+            last_center=detection.center,
+            last_frame_index=detection.frame_index,
+            last_seen_timestamp=detection.timestamp,
+            color_signature=self.reacquire.color_signature(frame, detection.bbox),
+            track_aliases=[] if detection.track_id is None else [detection.track_id],
+        )
+        self.next_global_vehicle_id += 1
+        self.selected_identity = identity
+        self.status = "tracking"
+        self.last_reacquire_score = 1.0
+        self.camera_cut_seen = False
+        self.reacquire.reset_pending()
+        return identity
+
+    def handle_camera_cut(self) -> None:
+        if self.selected_identity is None:
+            return
+        self.selected_identity.last_track_id = None
+        self.selected_identity.status = "camera_cut"
+        self.status = "camera_cut"
+        self.camera_cut_seen = True
+        self.reacquire.reset_pending()
+
+    def update(self, detections: list[TrackedDetection], frame) -> list[SelectedTarget]:
+        if self.selected_identity is None:
+            self.status = "idle"
+            self.last_reacquire_score = 0.0
+            return []
+
+        target = self._find_by_current_track(detections)
+        if target is None:
+            target, score = self.reacquire.choose(self.selected_identity, detections, frame)
+            self.last_reacquire_score = score
+        else:
+            self.last_reacquire_score = 1.0
+
+        if target is not None:
+            self._update_identity(target, frame)
+            self.status = "tracking"
+            self.selected_identity.status = "tracking"
+            self.camera_cut_seen = False
+            return [self._selected_target_from_detection(target, "tracking")]
+
+        identity = self.selected_identity
+        identity.lost_frames += 1
+        if self.camera_cut_seen:
+            self.status = "camera_cut"
+        elif identity.lost_frames > self.max_lost_frames:
+            self.status = "lost"
+        elif identity.lost_frames >= self.searching_after_frames:
+            self.status = "searching"
+        else:
+            self.status = "tracking"
+        identity.status = self.status
+        return [self._selected_target_from_identity()]
+
+    def is_selected_detection(self, detection: TrackedDetection) -> bool:
+        identity = self.selected_identity
+        if identity is None or detection.track_id is None:
+            return False
+        return detection.track_id == identity.last_track_id
+
+    def global_id_for_detection(self, detection: TrackedDetection) -> int | None:
+        if self.is_selected_detection(detection):
+            return self.selected_global_vehicle_id
+        return None
+
+    def _find_by_current_track(self, detections: list[TrackedDetection]) -> TrackedDetection | None:
+        identity = self.selected_identity
+        if identity is None or identity.last_track_id is None:
+            return None
+        for detection in detections:
+            if detection.track_id == identity.last_track_id:
+                return detection
+        return None
+
+    def _update_identity(self, detection: TrackedDetection, frame) -> None:
+        if self.selected_identity is None:
+            return
+        identity = self.selected_identity
+        identity.last_track_id = detection.track_id
+        identity.class_name = detection.class_name
+        identity.confidence = detection.confidence
+        identity.last_bbox = detection.bbox
+        identity.last_center = detection.center
+        identity.last_frame_index = detection.frame_index
+        identity.last_seen_timestamp = detection.timestamp
+        identity.lost_frames = 0
+        signature = self.reacquire.color_signature(frame, detection.bbox)
+        if signature is not None:
+            identity.color_signature = signature
+        if detection.track_id is not None and detection.track_id not in identity.track_aliases:
+            identity.track_aliases.append(detection.track_id)
+            identity.track_aliases = identity.track_aliases[-12:]
+
+    @staticmethod
+    def _selected_target_from_detection(
+        detection: TrackedDetection,
+        status: str,
+    ) -> SelectedTarget:
+        return SelectedTarget(
+            track_id=detection.track_id if detection.track_id is not None else -1,
+            bbox=detection.bbox,
+            class_name=detection.class_name,
+            confidence=detection.confidence,
+            center=detection.center,
+            status=status,  # type: ignore[arg-type]
+            lost_frame_count=0,
+        )
+
+    def _selected_target_from_identity(self) -> SelectedTarget:
+        assert self.selected_identity is not None
+        identity = self.selected_identity
+        status = "lost" if self.status in {"searching", "camera_cut", "lost"} else "tracking"
+        return SelectedTarget(
+            track_id=identity.last_track_id if identity.last_track_id is not None else -1,
+            bbox=identity.last_bbox,
+            class_name=identity.class_name,
+            confidence=identity.confidence,
+            center=identity.last_center,
+            status=status,  # type: ignore[arg-type]
+            lost_frame_count=identity.lost_frames,
+        )
