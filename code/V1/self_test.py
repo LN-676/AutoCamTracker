@@ -24,6 +24,7 @@ def main() -> int:
 
     results.append(run_check("dependencies", check_dependencies))
     results.append(run_check("identity_store", check_identity_store))
+    results.append(run_check("feature_gallery", check_feature_gallery))
     results.append(run_check("model_load", check_model_load))
     results.append(run_check("video_input_pipeline", check_video_input_pipeline))
     results.append(run_check("webcam_probe", check_webcam_probe, warning_ok=True))
@@ -103,16 +104,70 @@ def check_identity_store() -> str:
         timestamp=1.0,
         tracker_name="botsort",
     )
-    signature = [0.1, 0.2, 0.7, 0.0]
     with tempfile.TemporaryDirectory() as temp_dir:
         store = VehicleIdentityStore(Path(temp_dir) / "identity.sqlite3")
-        vehicle_id = store.create_vehicle(detection, signature)
-        match = store.find_best_match(detection, signature, min_score=0.5)
+        vehicle_id = store.create_vehicle(detection)
+        stored = store.get_vehicle(vehicle_id)
+        summary = store.summary()
         store.close()
 
-    if match is None or match.vehicle_id != vehicle_id:
-        raise RuntimeError("identity store failed to match the inserted vehicle")
-    return f"vehicle_id={vehicle_id}; score={match.score:.2f}"
+    if stored is None or summary.vehicle_count != 1:
+        raise RuntimeError("identity store failed to persist metadata")
+    return f"vehicle_id={vehicle_id}; bbox={stored.bbox}; master={summary.master_feature_count}"
+
+
+def check_feature_gallery() -> str:
+    import cv2
+    import numpy as np
+
+    sys.path.insert(0, str(PROJECT_ROOT / "code" / "V1"))
+    from feature_gallery import FeatureGallery
+    from vehicle_identity_store import VehicleIdentityStore
+    from video_detector import TrackedDetection
+
+    frame = np.zeros((180, 260, 3), dtype=np.uint8)
+    rng = np.random.default_rng(7)
+    frame[40:130, 60:170] = rng.integers(40, 220, size=(90, 110, 3), dtype=np.uint8)
+    cv2.rectangle(frame, (60, 40), (170, 130), (255, 255, 255), 2)
+    detection = TrackedDetection(
+        track_id=7,
+        bbox=(60.0, 40.0, 170.0, 130.0),
+        class_id=2,
+        class_name="car",
+        confidence=0.91,
+        center=(115.0, 85.0),
+        frame_index=3,
+        timestamp=2.0,
+        tracker_name="botsort",
+    )
+
+    class DummyExtractor:
+        def extract(self, _frame, bbox):
+            x1, y1, x2, y2 = bbox
+            vector = np.array([x1 + x2, y1 + y2, x2 - x1, y2 - y1], dtype=np.float32)
+            vector /= max(1e-6, float(np.linalg.norm(vector)))
+            return vector.tolist()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        db_path = Path(temp_dir) / "identity.sqlite3"
+        store = VehicleIdentityStore(db_path)
+        vehicle_id = store.create_vehicle(detection)
+        gallery = FeatureGallery(db_path)
+        gallery.embedding_extractor = DummyExtractor()
+        added = gallery.add_master_feature(vehicle_id, detection, frame)
+        duplicate = gallery.add_master_feature(vehicle_id, detection, frame)
+        matches = gallery.match_top_k(DummyExtractor().extract(frame, detection.bbox), vehicle_id=vehicle_id)
+        counts = gallery.summary_by_vehicle()
+        gallery.close()
+        store.close()
+
+    if not added.accepted or added.feature_id is None:
+        raise RuntimeError(f"feature add failed: {added.reason}")
+    if duplicate.accepted:
+        raise RuntimeError("duplicate master feature was not rejected")
+    if not matches or matches[0].vehicle_id != vehicle_id:
+        raise RuntimeError("master gallery top-k matching failed")
+    return f"vehicle_id={vehicle_id}; master={counts[vehicle_id].get('master', 0)}; top={matches[0].score:.2f}"
 
 
 def check_video_input_pipeline() -> str:

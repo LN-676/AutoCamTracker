@@ -1,10 +1,4 @@
-"""Persistent vehicle identity store for AutoCamTracker V1.
-
-This module is intentionally lightweight: it gives the runtime a durable
-vehicle_id layer before introducing heavier ReID embeddings or license plate
-OCR. The stored color signature is not a strong identity by itself, but it is a
-useful first matching signal when combined with class, box shape, and time.
-"""
+"""Persistent metadata-only vehicle identity store for AutoCamTracker V1."""
 
 from __future__ import annotations
 
@@ -22,12 +16,6 @@ except ImportError:  # pragma: no cover
 
 
 @dataclass
-class IdentityStoreMatch:
-    vehicle_id: int
-    score: float
-
-
-@dataclass
 class StoredVehicleIdentity:
     vehicle_id: int
     display_name: str
@@ -38,8 +26,7 @@ class StoredVehicleIdentity:
     confidence: float
     bbox: tuple[float, float, float, float]
     center: tuple[float, float]
-    color_signature: list[float] | None
-    appearance_embedding: list[float] | None
+    metadata: dict[str, Any]
 
 
 @dataclass
@@ -50,21 +37,27 @@ class VehicleIdentitySummary:
     last_track_id: int | None
     last_frame_index: int
     confidence: float
-    observation_count: int
-    duplicate_observation_count: int
-    updated_at: float
+    master_feature_count: int = 0
+    pending_feature_count: int = 0
+    candidate_feature_count: int = 0
+    updated_at: float = 0.0
 
 
 @dataclass
 class IdentityStoreSummary:
     vehicle_count: int
-    observation_count: int
-    duplicate_observation_count: int
+    master_feature_count: int
+    pending_feature_count: int
+    candidate_feature_count: int
     vehicles: list[VehicleIdentitySummary]
 
 
 class VehicleIdentityStore:
-    """SQLite-backed store for long-lived vehicle identities and observations."""
+    """SQLite-backed store for GID, last bbox, and basic vehicle metadata.
+
+    V1.21 intentionally keeps embeddings out of this class. ReID features live
+    in FeatureGallery and are written only by explicit Add Feature actions.
+    """
 
     def __init__(self, db_path: Path | str) -> None:
         self.db_path = Path(db_path)
@@ -76,12 +69,7 @@ class VehicleIdentityStore:
     def close(self) -> None:
         self.connection.close()
 
-    def create_vehicle(
-        self,
-        detection: TrackedDetection,
-        color_signature: Any | None = None,
-        appearance_embedding: Any | None = None,
-    ) -> int:
+    def create_vehicle(self, detection: TrackedDetection, metadata: dict[str, Any] | None = None) -> int:
         now = time()
         payload = self._detection_payload(detection)
         cursor = self.connection.execute(
@@ -96,11 +84,9 @@ class VehicleIdentityStore:
                 confidence,
                 bbox_json,
                 center_json,
-                color_signature_json,
-                embedding_json,
-                observation_count
+                metadata_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 now,
@@ -112,58 +98,20 @@ class VehicleIdentityStore:
                 detection.confidence,
                 payload["bbox_json"],
                 payload["center_json"],
-                self._signature_json(color_signature),
-                self._vector_json(appearance_embedding),
+                self._metadata_json(metadata),
             ),
         )
-        vehicle_id = int(cursor.lastrowid)
-        self.record_observation(vehicle_id, detection, color_signature, appearance_embedding)
-        return vehicle_id
+        self.connection.commit()
+        return int(cursor.lastrowid)
 
-    def record_observation(
+    def update_vehicle(
         self,
         vehicle_id: int,
         detection: TrackedDetection,
-        color_signature: Any | None = None,
-        appearance_embedding: Any | None = None,
-    ) -> None:
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
         payload = self._detection_payload(detection)
-        signature_json = self._signature_json(color_signature)
-        embedding_json = self._vector_json(appearance_embedding)
-        self.connection.execute(
-            """
-            INSERT INTO observations (
-                vehicle_id,
-                seen_at,
-                track_id,
-                frame_index,
-                seen_timestamp,
-                class_name,
-                confidence,
-                bbox_json,
-                center_json,
-                tracker_name,
-                color_signature_json,
-                embedding_json
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                vehicle_id,
-                time(),
-                detection.track_id,
-                detection.frame_index,
-                detection.timestamp,
-                detection.class_name,
-                detection.confidence,
-                payload["bbox_json"],
-                payload["center_json"],
-                detection.tracker_name,
-                signature_json,
-                embedding_json,
-            ),
-        )
-        self.connection.execute(
+        cursor = self.connection.execute(
             """
             UPDATE vehicles
             SET updated_at = ?,
@@ -174,9 +122,7 @@ class VehicleIdentityStore:
                 confidence = ?,
                 bbox_json = ?,
                 center_json = ?,
-                color_signature_json = COALESCE(?, color_signature_json),
-                embedding_json = COALESCE(?, embedding_json),
-                observation_count = observation_count + 1
+                metadata_json = COALESCE(?, metadata_json)
             WHERE id = ?
             """,
             (
@@ -188,39 +134,12 @@ class VehicleIdentityStore:
                 detection.confidence,
                 payload["bbox_json"],
                 payload["center_json"],
-                signature_json,
-                embedding_json,
+                self._metadata_json(metadata),
                 vehicle_id,
             ),
         )
         self.connection.commit()
-
-    def find_best_match(
-        self,
-        detection: TrackedDetection,
-        color_signature: Any | None = None,
-        appearance_embedding: Any | None = None,
-        min_score: float = 0.72,
-    ) -> IdentityStoreMatch | None:
-        rows = self.connection.execute(
-            """
-            SELECT id, class_name, bbox_json, color_signature_json, embedding_json, observation_count
-            FROM vehicles
-            WHERE color_signature_json IS NOT NULL OR embedding_json IS NOT NULL
-            ORDER BY updated_at DESC
-            LIMIT 200
-            """
-        ).fetchall()
-
-        best: IdentityStoreMatch | None = None
-        for row in rows:
-            score = self._match_score_with_gallery(row, detection, color_signature, appearance_embedding)
-            if best is None or score > best.score:
-                best = IdentityStoreMatch(vehicle_id=int(row["id"]), score=score)
-
-        if best is None or best.score < min_score:
-            return None
-        return best
+        return cursor.rowcount > 0
 
     def get_vehicle(self, vehicle_id: int) -> StoredVehicleIdentity | None:
         row = self.connection.execute(
@@ -235,8 +154,7 @@ class VehicleIdentityStore:
                 confidence,
                 bbox_json,
                 center_json,
-                color_signature_json,
-                embedding_json
+                metadata_json
             FROM vehicles
             WHERE id = ?
             """,
@@ -254,28 +172,8 @@ class VehicleIdentityStore:
             confidence=float(row["confidence"]),
             bbox=self._bbox_from_json(row["bbox_json"]),
             center=self._center_from_json(row["center_json"]),
-            color_signature=self._signature_from_json(row["color_signature_json"]),
-            appearance_embedding=self._vector_from_json(row["embedding_json"]),
+            metadata=self._metadata_from_json(row["metadata_json"] if "metadata_json" in row.keys() else None),
         )
-
-    def score_vehicle_match(
-        self,
-        vehicle_id: int,
-        detection: TrackedDetection,
-        color_signature: Any | None = None,
-        appearance_embedding: Any | None = None,
-    ) -> float | None:
-        row = self.connection.execute(
-            """
-            SELECT id, class_name, bbox_json, color_signature_json, embedding_json, observation_count
-            FROM vehicles
-            WHERE id = ?
-            """,
-            (vehicle_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        return self._match_score_with_gallery(row, detection, color_signature, appearance_embedding)
 
     def display_label(self, vehicle_id: int) -> str:
         row = self.connection.execute(
@@ -296,23 +194,14 @@ class VehicleIdentityStore:
         return cursor.rowcount > 0
 
     def delete_vehicle(self, vehicle_id: int) -> bool:
-        cursor = self.connection.execute("DELETE FROM observations WHERE vehicle_id = ?", (vehicle_id,))
-        observation_count = cursor.rowcount
         cursor = self.connection.execute("DELETE FROM vehicles WHERE id = ?", (vehicle_id,))
-        vehicle_deleted = cursor.rowcount > 0
+        deleted = cursor.rowcount > 0
         self.connection.commit()
-        return vehicle_deleted or observation_count > 0
+        return deleted
 
-    def summary(self, limit: int = 50) -> IdentityStoreSummary:
-        total = self.connection.execute(
-            """
-            SELECT
-                COUNT(*) AS vehicle_count,
-                COALESCE(SUM(observation_count), 0) AS observation_count,
-                COALESCE(SUM(MAX(observation_count - 1, 0)), 0) AS duplicate_observation_count
-            FROM vehicles
-            """
-        ).fetchone()
+    def summary(self, feature_counts: dict[int, dict[str, int]] | None = None, limit: int = 50) -> IdentityStoreSummary:
+        feature_counts = feature_counts or {}
+        total = self.connection.execute("SELECT COUNT(*) AS vehicle_count FROM vehicles").fetchone()
         rows = self.connection.execute(
             """
             SELECT
@@ -322,7 +211,6 @@ class VehicleIdentityStore:
                 last_track_id,
                 last_frame_index,
                 confidence,
-                observation_count,
                 updated_at
             FROM vehicles
             ORDER BY updated_at DESC
@@ -330,24 +218,28 @@ class VehicleIdentityStore:
             """,
             (limit,),
         ).fetchall()
-        vehicles = [
-            VehicleIdentitySummary(
-                vehicle_id=int(row["id"]),
-                display_name=self._display_name(row),
-                class_name=str(row["class_name"]),
-                last_track_id=row["last_track_id"],
-                last_frame_index=int(row["last_frame_index"]),
-                confidence=float(row["confidence"]),
-                observation_count=int(row["observation_count"]),
-                duplicate_observation_count=max(0, int(row["observation_count"]) - 1),
-                updated_at=float(row["updated_at"]),
+        vehicles: list[VehicleIdentitySummary] = []
+        for row in rows:
+            counts = feature_counts.get(int(row["id"]), {})
+            vehicles.append(
+                VehicleIdentitySummary(
+                    vehicle_id=int(row["id"]),
+                    display_name=self._display_name(row),
+                    class_name=str(row["class_name"]),
+                    last_track_id=row["last_track_id"],
+                    last_frame_index=int(row["last_frame_index"]),
+                    confidence=float(row["confidence"]),
+                    master_feature_count=int(counts.get("master", 0)),
+                    pending_feature_count=int(counts.get("pending", 0)),
+                    candidate_feature_count=int(counts.get("candidate", 0)),
+                    updated_at=float(row["updated_at"]),
+                )
             )
-            for row in rows
-        ]
         return IdentityStoreSummary(
             vehicle_count=int(total["vehicle_count"] or 0),
-            observation_count=int(total["observation_count"] or 0),
-            duplicate_observation_count=int(total["duplicate_observation_count"] or 0),
+            master_feature_count=sum(int(counts.get("master", 0)) for counts in feature_counts.values()),
+            pending_feature_count=sum(int(counts.get("pending", 0)) for counts in feature_counts.values()),
+            candidate_feature_count=sum(int(counts.get("candidate", 0)) for counts in feature_counts.values()),
             vehicles=vehicles,
         )
 
@@ -366,126 +258,17 @@ class VehicleIdentityStore:
                 confidence REAL NOT NULL,
                 bbox_json TEXT NOT NULL,
                 center_json TEXT NOT NULL,
-                color_signature_json TEXT,
-                embedding_json TEXT,
-                observation_count INTEGER NOT NULL DEFAULT 0
+                metadata_json TEXT
             )
             """
         )
         self._ensure_column("vehicles", "display_name", "TEXT")
-        self._ensure_column("vehicles", "embedding_json", "TEXT")
-        self.connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS observations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                vehicle_id INTEGER NOT NULL,
-                seen_at REAL NOT NULL,
-                track_id INTEGER,
-                frame_index INTEGER NOT NULL,
-                seen_timestamp REAL NOT NULL,
-                class_name TEXT NOT NULL,
-                confidence REAL NOT NULL,
-                bbox_json TEXT NOT NULL,
-                center_json TEXT NOT NULL,
-                tracker_name TEXT NOT NULL,
-                color_signature_json TEXT,
-                embedding_json TEXT,
-                FOREIGN KEY(vehicle_id) REFERENCES vehicles(id)
-            )
-            """
-        )
-        self._ensure_column("observations", "embedding_json", "TEXT")
-        self.connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_observations_vehicle_id ON observations(vehicle_id)"
-        )
-        self.connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_observations_seen_at ON observations(seen_at)"
-        )
+        self._ensure_column("vehicles", "metadata_json", "TEXT")
+        self.connection.execute("DROP TABLE IF EXISTS observations")
         self.connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_vehicles_updated_at ON vehicles(updated_at)"
         )
         self.connection.commit()
-
-    def _match_score_with_gallery(
-        self,
-        row: sqlite3.Row,
-        detection: TrackedDetection,
-        color_signature: Any | None,
-        appearance_embedding: Any | None = None,
-    ) -> float:
-        base_score = self._match_score(row, detection, color_signature, appearance_embedding)
-        if appearance_embedding is None:
-            return base_score
-
-        gallery_score = self._gallery_embedding_score(int(row["id"]), appearance_embedding)
-        if gallery_score is None:
-            return base_score
-
-        color_score = self._correlation(self._signature_from_json(row["color_signature_json"]), color_signature)
-        class_score = 1.0 if row["class_name"] == detection.class_name else 0.0
-        size_score = self._size_similarity(self._bbox_from_json(row["bbox_json"]), detection.bbox)
-        observation_score = min(1.0, float(row["observation_count"] or 0) / 8.0)
-        confidence_score = max(0.0, min(1.0, detection.confidence))
-        gallery_weighted_score = (
-            0.70 * gallery_score
-            + 0.10 * color_score
-            + 0.08 * class_score
-            + 0.06 * size_score
-            + 0.03 * observation_score
-            + 0.03 * confidence_score
-        )
-        return max(base_score, gallery_weighted_score)
-
-    def _gallery_embedding_score(self, vehicle_id: int, appearance_embedding: Any, limit: int = 80) -> float | None:
-        rows = self.connection.execute(
-            """
-            SELECT embedding_json
-            FROM observations
-            WHERE vehicle_id = ? AND embedding_json IS NOT NULL
-            ORDER BY seen_at DESC
-            LIMIT ?
-            """,
-            (vehicle_id, limit),
-        ).fetchall()
-        scores = [
-            self._cosine_similarity(self._vector_from_json(row["embedding_json"]), appearance_embedding)
-            for row in rows
-        ]
-        scores = [score for score in scores if score > 0.0]
-        return max(scores) if scores else None
-
-    @classmethod
-    def _match_score(
-        cls,
-        row: sqlite3.Row,
-        detection: TrackedDetection,
-        color_signature: Any | None,
-        appearance_embedding: Any | None = None,
-    ) -> float:
-        stored_signature = cls._signature_from_json(row["color_signature_json"])
-        stored_embedding = cls._vector_from_json(row["embedding_json"] if "embedding_json" in row.keys() else None)
-        embedding_score = cls._cosine_similarity(stored_embedding, appearance_embedding)
-        color_score = cls._correlation(stored_signature, color_signature)
-        class_score = 1.0 if row["class_name"] == detection.class_name else 0.0
-        size_score = cls._size_similarity(cls._bbox_from_json(row["bbox_json"]), detection.bbox)
-        observation_score = min(1.0, float(row["observation_count"] or 0) / 8.0)
-        confidence_score = max(0.0, min(1.0, detection.confidence))
-        if stored_embedding is not None and appearance_embedding is not None:
-            return (
-                0.70 * embedding_score
-                + 0.10 * color_score
-                + 0.08 * class_score
-                + 0.06 * size_score
-                + 0.03 * observation_score
-                + 0.03 * confidence_score
-            )
-        return (
-            0.56 * color_score
-            + 0.16 * class_score
-            + 0.12 * size_score
-            + 0.08 * observation_score
-            + 0.08 * confidence_score
-        )
 
     @staticmethod
     def _detection_payload(detection: TrackedDetection) -> dict[str, str]:
@@ -495,50 +278,20 @@ class VehicleIdentityStore:
         }
 
     @staticmethod
-    def _signature_json(color_signature: Any | None) -> str | None:
-        if color_signature is None:
+    def _metadata_json(metadata: dict[str, Any] | None) -> str | None:
+        if metadata is None:
             return None
-        if hasattr(color_signature, "tolist"):
-            color_signature = color_signature.tolist()
-        return json.dumps([float(value) for value in color_signature])
+        return json.dumps(metadata, sort_keys=True)
 
     @staticmethod
-    def _vector_json(vector: Any | None) -> str | None:
-        if vector is None:
-            return None
-        if hasattr(vector, "tolist"):
-            vector = vector.tolist()
-        return json.dumps([float(value) for value in vector])
-
-    @staticmethod
-    def _signature_from_json(value: str | None) -> list[float] | None:
-        return VehicleIdentityStore._vector_from_json(value)
-
-    @staticmethod
-    def _vector_from_json(value: str | None) -> list[float] | None:
+    def _metadata_from_json(value: str | None) -> dict[str, Any]:
         if not value:
-            return None
+            return {}
         try:
-            return [float(item) for item in json.loads(value)]
+            parsed = json.loads(value)
         except (TypeError, ValueError, json.JSONDecodeError):
-            return None
-
-    @staticmethod
-    def _cosine_similarity(first: Any | None, second: Any | None) -> float:
-        if first is None or second is None:
-            return 0.0
-        if hasattr(second, "tolist"):
-            second = second.tolist()
-        first_values = [float(value) for value in first]
-        second_values = [float(value) for value in second]
-        if len(first_values) != len(second_values) or not first_values:
-            return 0.0
-        numerator = sum(a * b for a, b in zip(first_values, second_values))
-        first_norm = sum(a * a for a in first_values) ** 0.5
-        second_norm = sum(b * b for b in second_values) ** 0.5
-        if first_norm <= 1e-12 or second_norm <= 1e-12:
-            return 0.0
-        return max(0.0, min(1.0, numerator / (first_norm * second_norm)))
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
 
     @staticmethod
     def _bbox_from_json(value: str) -> tuple[float, float, float, float]:
@@ -560,47 +313,3 @@ class VehicleIdentityStore:
         if any(row["name"] == column_name for row in rows):
             return
         self.connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
-
-    @staticmethod
-    def _correlation(first: Any | None, second: Any | None) -> float:
-        if first is None or second is None:
-            return 0.0
-        if hasattr(second, "tolist"):
-            second = second.tolist()
-        first_values = [float(value) for value in first]
-        second_values = [float(value) for value in second]
-        if len(first_values) != len(second_values) or not first_values:
-            return 0.0
-
-        first_mean = sum(first_values) / len(first_values)
-        second_mean = sum(second_values) / len(second_values)
-        numerator = 0.0
-        first_denominator = 0.0
-        second_denominator = 0.0
-        for first_value, second_value in zip(first_values, second_values):
-            first_delta = first_value - first_mean
-            second_delta = second_value - second_mean
-            numerator += first_delta * second_delta
-            first_denominator += first_delta * first_delta
-            second_denominator += second_delta * second_delta
-        denominator = (first_denominator * second_denominator) ** 0.5
-        if denominator <= 0:
-            return 0.0
-        return max(0.0, min(1.0, numerator / denominator))
-
-    @staticmethod
-    def _size_similarity(
-        first: tuple[float, float, float, float],
-        second: tuple[float, float, float, float],
-    ) -> float:
-        first_w = max(1.0, first[2] - first[0])
-        first_h = max(1.0, first[3] - first[1])
-        second_w = max(1.0, second[2] - second[0])
-        second_h = max(1.0, second[3] - second[1])
-        first_area = first_w * first_h
-        second_area = second_w * second_h
-        area = min(first_area, second_area) / max(first_area, second_area)
-        first_aspect = first_w / first_h
-        second_aspect = second_w / second_h
-        aspect = min(first_aspect, second_aspect) / max(first_aspect, second_aspect)
-        return float(0.7 * area + 0.3 * aspect)

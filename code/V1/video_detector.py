@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 
 
 SourceType = Literal["webcam", "video_file", "video_url", "screen_region"]
-TrackerName = Literal["botsort", "botsort_reid", "deepocsort"]
+TrackerName = Literal["botsort", "deepocsort"]
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -34,7 +34,6 @@ CACHE_ROOT = Path(tempfile.gettempdir()) / "autocamtracker-cache"
 
 TRACKER_CONFIGS: dict[TrackerName, str] = {
     "botsort": "botsort.yaml",
-    "botsort_reid": str(PROJECT_ROOT / "code" / "V1" / "trackers" / "botsort_reid.yaml"),
     "deepocsort": "deepocsort.yaml",
 }
 

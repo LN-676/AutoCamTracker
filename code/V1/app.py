@@ -29,6 +29,7 @@ except ImportError:  # pragma: no cover
 try:
     from video_detector import InputConfig, VideoDetector
     from detection_store import DetectionStore
+    from feature_gallery import FeatureGallery
     from frame_data import FrameData
     from identity_manager import GlobalIdentityManager
     from pipeline_processor import PipelineProcessor
@@ -38,6 +39,7 @@ try:
 except ImportError:  # pragma: no cover
     from .video_detector import InputConfig, VideoDetector
     from .detection_store import DetectionStore
+    from .feature_gallery import FeatureGallery
     from .frame_data import FrameData
     from .identity_manager import GlobalIdentityManager
     from .pipeline_processor import PipelineProcessor
@@ -71,7 +73,11 @@ class AutoCamTrackerApp:
         self.detector: VideoDetector | None = None
         self.store = DetectionStore()
         self.identity_store = VehicleIdentityStore(self.config.identity_db_path)
-        self.identity_manager = GlobalIdentityManager(identity_store=self.identity_store)
+        self.feature_gallery = FeatureGallery(self.config.identity_db_path)
+        self.identity_manager = GlobalIdentityManager(
+            identity_store=self.identity_store,
+            feature_gallery=self.feature_gallery,
+        )
         self.scene_cut_detector = SceneCutDetector()
         self.reframer = Reframer(
             FramingConfig(
@@ -104,6 +110,7 @@ class AutoCamTrackerApp:
         self.rendered_image_height = self.display_height
         self.timeline_dragging = False
         self.refreshing_identity_panel = False
+        self.link_bbox_vehicle_id: int | None = None
 
         self.before_image_ref = None
         self.after_image_ref = None
@@ -142,7 +149,7 @@ class AutoCamTrackerApp:
         self.video_url_var = tk.StringVar(value="")
         self.video_url_status_var = tk.StringVar(value="No video URL selected")
         self.screen_region_var = tk.StringVar(value="No screen region selected")
-        self.identity_summary_var = tk.StringVar(value="Vehicles: 0 | Observations: 0 | Rewrites: 0")
+        self.identity_summary_var = tk.StringVar(value="Vehicles: 0 | Master: 0 | Pending: 0 | Candidate: 0")
         self.timeline_var = tk.DoubleVar(value=0.0)
         self.timeline_label_var = tk.StringVar(value="00:00 / 00:00")
 
@@ -184,7 +191,7 @@ class AutoCamTrackerApp:
         ttk.Combobox(
             tracking_controls,
             textvariable=self.tracker_var,
-            values=["botsort", "botsort_reid", "deepocsort"],
+            values=["botsort", "deepocsort"],
             width=13,
             state="readonly",
         ).grid(row=1, column=1, sticky="ew", padx=4, pady=(8, 0))
@@ -223,10 +230,13 @@ class AutoCamTrackerApp:
 
         ttk.Label(identity_controls, textvariable=self.identity_summary_var).grid(row=0, column=0, sticky="w", padx=4)
         ttk.Button(identity_controls, text="Refresh", command=self.refresh_identity_db_panel).grid(row=0, column=1, sticky="ew", padx=4)
-        ttk.Button(identity_controls, text="Delete ID", command=self.delete_selected_identity).grid(row=0, column=2, sticky="ew", padx=4)
+        ttk.Button(identity_controls, text="Find GID", command=self.track_selected_identity_from_db).grid(row=0, column=2, sticky="ew", padx=4)
+        ttk.Button(identity_controls, text="Add Feature", command=self.add_feature_to_selected_identity).grid(row=0, column=3, sticky="ew", padx=4)
+        ttk.Button(identity_controls, text="Link BBox", command=self.start_link_bbox).grid(row=0, column=4, sticky="ew", padx=4)
+        ttk.Button(identity_controls, text="Delete ID", command=self.delete_selected_identity).grid(row=0, column=5, sticky="ew", padx=4)
         self.identity_tree = ttk.Treeview(
             identity_controls,
-            columns=("gid", "type", "lid", "obs", "dup", "frame", "conf"),
+            columns=("gid", "type", "lid", "master", "pending", "candidate", "frame", "conf"),
             show="headings",
             height=5,
         )
@@ -234,25 +244,35 @@ class AutoCamTrackerApp:
             "gid": "GID",
             "type": "Type",
             "lid": "LID",
-            "obs": "Obs",
-            "dup": "Rewrites",
+            "master": "Master",
+            "pending": "Pending",
+            "candidate": "Candidate",
             "frame": "Frame",
             "conf": "Conf",
         }
-        widths = {"gid": 44, "type": 68, "lid": 48, "obs": 48, "dup": 72, "frame": 58, "conf": 52}
+        widths = {
+            "gid": 44,
+            "type": 68,
+            "lid": 48,
+            "master": 58,
+            "pending": 62,
+            "candidate": 72,
+            "frame": 58,
+            "conf": 52,
+        }
         for column, label in headings.items():
             self.identity_tree.heading(column, text=label)
             self.identity_tree.column(column, width=widths[column], minwidth=36, anchor="center", stretch=False)
         self.identity_tree.tag_configure("selected", background="#d7ecff")
-        self.identity_tree.tag_configure("rewritten", background="#fff4cc")
-        self.identity_tree.bind("<<TreeviewSelect>>", self.track_selected_identity_from_db)
+        self.identity_tree.tag_configure("no_master", background="#fff4cc")
         self.identity_tree.bind("<Double-1>", self.edit_identity_display_name)
         self.identity_tree.bind("<Delete>", self.delete_selected_identity)
         self.identity_tree.bind("<BackSpace>", self.delete_selected_identity)
-        self.identity_tree.grid(row=1, column=0, columnspan=3, sticky="nsew", padx=4, pady=(8, 0))
+        self.identity_tree.grid(row=1, column=0, columnspan=6, sticky="nsew", padx=4, pady=(8, 0))
         identity_controls.columnconfigure(0, weight=1)
         identity_controls.columnconfigure(1, weight=1)
-        identity_controls.columnconfigure(2, weight=0)
+        for column in range(2, 6):
+            identity_controls.columnconfigure(column, weight=0)
         identity_controls.rowconfigure(1, weight=1)
 
         main.columnconfigure(0, weight=1)
@@ -562,6 +582,20 @@ class AutoCamTrackerApp:
             self.status_var.set("Status: selected candidate is no longer visible")
             return
 
+        if self.link_bbox_vehicle_id is not None:
+            vehicle_id = self.link_bbox_vehicle_id
+            self.link_bbox_vehicle_id = None
+            identity = self.identity_manager.link_detection(vehicle_id, detection, self.last_raw_frame)
+            self.refresh_identity_db_panel()
+            if identity is None:
+                self.status_var.set(f"Status: vehicle id {vehicle_id} was not found for bbox link")
+                return
+            label = self.identity_store.display_label(vehicle_id)
+            self.status_var.set(
+                f"Status: linked bbox local track {candidate.track_id} to GID {label}"
+            )
+            return
+
         identity = self.identity_manager.select_detection(detection, self.last_raw_frame)
         self.refresh_identity_db_panel()
         self.status_var.set(
@@ -718,6 +752,7 @@ class AutoCamTrackerApp:
         self.last_raw_frame = None
         self.current_frame_data = None
         self.skipped_frames = 0
+        self.link_bbox_vehicle_id = None
 
     def _clear_screen_region_selection(self) -> None:
         self.input_config.screen_region = None
@@ -760,11 +795,11 @@ class AutoCamTrackerApp:
         if not hasattr(self, "identity_tree"):
             return
         self.refreshing_identity_panel = True
-        summary = self.identity_store.summary()
+        summary = self.identity_store.summary(feature_counts=self.feature_gallery.summary_by_vehicle())
         self.identity_summary_var.set(
             "Vehicles: "
-            f"{summary.vehicle_count} | Observations: {summary.observation_count} | "
-            f"Rewrites: {summary.duplicate_observation_count}"
+            f"{summary.vehicle_count} | Master: {summary.master_feature_count} | "
+            f"Pending: {summary.pending_feature_count} | Candidate: {summary.candidate_feature_count}"
         )
         for item in self.identity_tree.get_children():
             self.identity_tree.delete(item)
@@ -774,8 +809,8 @@ class AutoCamTrackerApp:
             tags: tuple[str, ...] = ()
             if vehicle.vehicle_id == selected_gid:
                 tags = ("selected",)
-            elif vehicle.duplicate_observation_count > 0:
-                tags = ("rewritten",)
+            elif vehicle.master_feature_count <= 0:
+                tags = ("no_master",)
             self.identity_tree.insert(
                 "",
                 "end",
@@ -784,8 +819,9 @@ class AutoCamTrackerApp:
                     vehicle.display_name,
                     vehicle.class_name,
                     vehicle.last_track_id if vehicle.last_track_id is not None else "--",
-                    vehicle.observation_count,
-                    vehicle.duplicate_observation_count,
+                    vehicle.master_feature_count,
+                    vehicle.pending_feature_count,
+                    vehicle.candidate_feature_count,
                     vehicle.last_frame_index,
                     f"{vehicle.confidence:.2f}",
                 ),
@@ -834,6 +870,50 @@ class AutoCamTrackerApp:
                 )
         return "break"
 
+    def start_link_bbox(self) -> str:
+        vehicle_ids = self._selected_identity_vehicle_ids()
+        if not vehicle_ids:
+            self.status_var.set("Status: select a GID before Link BBox")
+            return "break"
+        self.link_bbox_vehicle_id = vehicle_ids[0]
+        label = self.identity_store.display_label(self.link_bbox_vehicle_id)
+        self.status_var.set(f"Status: click a visible bbox to link it to GID {label}")
+        return "break"
+
+    def add_feature_to_selected_identity(self) -> str:
+        vehicle_ids = self._selected_identity_vehicle_ids()
+        vehicle_id = vehicle_ids[0] if vehicle_ids else self.identity_manager.selected_global_vehicle_id
+        if vehicle_id is None:
+            self.status_var.set("Status: select a GID before Add Feature")
+            return "break"
+        if self.last_raw_frame is None:
+            self.status_var.set("Status: no current frame available for Add Feature")
+            return "break"
+
+        detection = self._detection_for_vehicle_id(vehicle_id)
+        if detection is None:
+            self.status_var.set("Status: Link BBox to a visible vehicle before Add Feature")
+            return "break"
+
+        result = self.feature_gallery.add_master_feature(vehicle_id, detection, self.last_raw_frame)
+        self.refresh_identity_db_panel()
+        label = self.identity_store.display_label(vehicle_id)
+        if result.accepted:
+            self.status_var.set(
+                f"Status: added master feature {result.feature_id} to GID {label} "
+                f"(quality {result.quality.score:.2f})"
+            )
+            return "break"
+        duplicate = (
+            f", duplicate {result.duplicate_score:.3f}"
+            if result.duplicate_score is not None
+            else ""
+        )
+        self.status_var.set(
+            f"Status: rejected Add Feature for GID {label}: {result.reason}{duplicate}"
+        )
+        return "break"
+
     def edit_identity_display_name(self, event) -> str:
         if self.identity_tree.identify_column(event.x) != "#1":
             return "break"
@@ -874,6 +954,7 @@ class AutoCamTrackerApp:
         deleted_ids: list[int] = []
         for vehicle_id in vehicle_ids:
             if self.identity_store.delete_vehicle(vehicle_id):
+                self.feature_gallery.delete_vehicle_features(vehicle_id)
                 deleted_ids.append(vehicle_id)
 
         if self.identity_manager.selected_global_vehicle_id in deleted_ids:
@@ -938,6 +1019,7 @@ class AutoCamTrackerApp:
         if self.detector is not None:
             self._close_detector()
             self.detector = None
+        self.feature_gallery.close()
         self.identity_store.close()
         self.root.destroy()
 
@@ -987,6 +1069,22 @@ class AutoCamTrackerApp:
         for detection in self.store.current_detections:
             if detection.track_id == track_id:
                 return detection
+        return None
+
+    def _detection_for_vehicle_id(self, vehicle_id: int):
+        identity = self.identity_manager.selected_identity
+        if (
+            identity is not None
+            and identity.global_vehicle_id == vehicle_id
+            and identity.last_track_id is not None
+        ):
+            detection = self._detection_for_track(identity.last_track_id)
+            if detection is not None:
+                return detection
+
+        stored = self.identity_store.get_vehicle(vehicle_id)
+        if stored is not None and stored.last_track_id is not None:
+            return self._detection_for_track(stored.last_track_id)
         return None
 
     def _draw_detections(self, frame, detections):
