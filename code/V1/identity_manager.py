@@ -18,7 +18,7 @@ except ImportError:  # pragma: no cover
 
 @dataclass
 class VehicleIdentity:
-    global_vehicle_id: int
+    global_vehicle_id: int | None
     last_track_id: int | None
     class_name: str
     confidence: float
@@ -202,9 +202,9 @@ class GlobalIdentityManager:
         self.camera_cut_seen = False
         self.reacquire.reset_pending()
 
-    def select_detection(self, detection: TrackedDetection, frame) -> VehicleIdentity:
+    def select_detection(self, detection: TrackedDetection, frame, persist: bool = True) -> VehicleIdentity:
         color_signature = self.reacquire.color_signature(frame, detection.bbox)
-        global_vehicle_id = self._resolve_global_vehicle_id(detection)
+        global_vehicle_id = self._resolve_global_vehicle_id(detection) if persist else None
         identity = self._identity_from_detection(global_vehicle_id, detection, color_signature)
         self.selected_identity = identity
         self.status = "tracking"
@@ -240,6 +240,18 @@ class GlobalIdentityManager:
         stored = self.identity_store.get_vehicle(vehicle_id)
         if stored is None:
             return None, 0.0
+
+        visible = self._visible_stored_detection(stored, detections)
+        if visible is not None:
+            color_signature = self.reacquire.color_signature(frame, visible.bbox)
+            identity = self._identity_from_detection(vehicle_id, visible, color_signature)
+            self.selected_identity = identity
+            self.status = "tracking"
+            self.last_reacquire_score = 1.0
+            self.camera_cut_seen = False
+            self.reacquire.reset_pending()
+            self.identity_store.update_vehicle(vehicle_id, visible, {"matched_by": "linked_bbox"})
+            return identity, 1.0
 
         ranked = (
             self.feature_gallery.rank_detections_for_vehicle(vehicle_id, detections, frame)
@@ -336,6 +348,7 @@ class GlobalIdentityManager:
     def _resolve_global_vehicle_id(self, detection: TrackedDetection) -> int:
         if (
             self.selected_identity is not None
+            and self.selected_identity.global_vehicle_id is not None
             and detection.track_id is not None
             and detection.track_id == self.selected_identity.last_track_id
         ):
@@ -374,7 +387,7 @@ class GlobalIdentityManager:
         signature = self.reacquire.color_signature(frame, detection.bbox)
         if signature is not None:
             identity.color_signature = signature
-        if self.identity_store is not None:
+        if self.identity_store is not None and identity.global_vehicle_id is not None:
             self.identity_store.update_vehicle(identity.global_vehicle_id, detection)
         if detection.track_id is not None and detection.track_id not in identity.track_aliases:
             identity.track_aliases.append(detection.track_id)
@@ -382,7 +395,7 @@ class GlobalIdentityManager:
 
     def _identity_from_detection(
         self,
-        vehicle_id: int,
+        vehicle_id: int | None,
         detection: TrackedDetection,
         color_signature: object | None,
     ) -> VehicleIdentity:
@@ -398,6 +411,46 @@ class GlobalIdentityManager:
             color_signature=color_signature,
             track_aliases=[] if detection.track_id is None else [detection.track_id],
         )
+
+    def _visible_stored_detection(
+        self,
+        stored,
+        detections: list[TrackedDetection],
+    ) -> TrackedDetection | None:
+        if stored.last_track_id is not None:
+            for detection in detections:
+                if detection.track_id == stored.last_track_id:
+                    return detection
+
+        candidates = [
+            detection
+            for detection in detections
+            if detection.class_name == stored.class_name
+        ]
+        if not candidates:
+            return None
+
+        best = max(candidates, key=lambda detection: self._bbox_iou(stored.bbox, detection.bbox))
+        return best if self._bbox_iou(stored.bbox, best.bbox) >= 0.35 else None
+
+    @staticmethod
+    def _bbox_iou(
+        first: tuple[float, float, float, float],
+        second: tuple[float, float, float, float],
+    ) -> float:
+        left = max(first[0], second[0])
+        top = max(first[1], second[1])
+        right = min(first[2], second[2])
+        bottom = min(first[3], second[3])
+        intersection = max(0.0, right - left) * max(0.0, bottom - top)
+        if intersection <= 0.0:
+            return 0.0
+        first_area = max(0.0, first[2] - first[0]) * max(0.0, first[3] - first[1])
+        second_area = max(0.0, second[2] - second[0]) * max(0.0, second[3] - second[1])
+        union = first_area + second_area - intersection
+        if union <= 0.0:
+            return 0.0
+        return float(intersection / union)
 
     @staticmethod
     def _selected_target_from_detection(

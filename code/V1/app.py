@@ -248,7 +248,7 @@ class AutoCamTrackerApp:
             "pending": "Pending",
             "candidate": "Candidate",
             "frame": "Frame",
-            "conf": "Conf",
+            "conf": "DetConf",
         }
         widths = {
             "gid": 44,
@@ -524,8 +524,12 @@ class AutoCamTrackerApp:
             self.identity_manager.reset()
             self.refresh_identity_db_panel()
             return
-        self.identity_manager.select_detection(detection, self.last_raw_frame)
+        identity = self.identity_manager.select_detection(detection, self.last_raw_frame, persist=False)
         self.refresh_identity_db_panel()
+        self.status_var.set(
+            "Status: auto tracking local track "
+            f"{identity.last_track_id if identity.last_track_id is not None else '--'} without writing Identity DB"
+        )
 
     def on_views_resize(self, event) -> None:
         width_limit = max(160, (event.width - 24) // 2)
@@ -860,7 +864,7 @@ class AutoCamTrackerApp:
             )
         else:
             self.status_var.set(
-                f"Status: tracking DB vehicle {label} on local track {identity.last_track_id} "
+                f"Status: tracking GID {label} on local track {identity.last_track_id} "
                 f"(score {score:.2f})"
             )
             if self.current_frame_data is not None:

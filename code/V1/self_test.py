@@ -24,6 +24,7 @@ def main() -> int:
 
     results.append(run_check("dependencies", check_dependencies))
     results.append(run_check("identity_store", check_identity_store))
+    results.append(run_check("identity_manager", check_identity_manager))
     results.append(run_check("feature_gallery", check_feature_gallery))
     results.append(run_check("model_load", check_model_load))
     results.append(run_check("video_input_pipeline", check_video_input_pipeline))
@@ -168,6 +169,43 @@ def check_feature_gallery() -> str:
     if not matches or matches[0].vehicle_id != vehicle_id:
         raise RuntimeError("master gallery top-k matching failed")
     return f"vehicle_id={vehicle_id}; master={counts[vehicle_id].get('master', 0)}; top={matches[0].score:.2f}"
+
+
+def check_identity_manager() -> str:
+    import numpy as np
+
+    sys.path.insert(0, str(PROJECT_ROOT / "code" / "V1"))
+    from identity_manager import GlobalIdentityManager
+    from vehicle_identity_store import VehicleIdentityStore
+    from video_detector import TrackedDetection
+
+    frame = np.full((120, 180, 3), 80, dtype=np.uint8)
+    detection = TrackedDetection(
+        track_id=31,
+        bbox=(20.0, 20.0, 90.0, 80.0),
+        class_id=2,
+        class_name="car",
+        confidence=0.74,
+        center=(55.0, 50.0),
+        frame_index=5,
+        timestamp=1.0,
+        tracker_name="botsort",
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        store = VehicleIdentityStore(Path(temp_dir) / "identity.sqlite3")
+        manager = GlobalIdentityManager(identity_store=store)
+        transient = manager.select_detection(detection, frame, persist=False)
+        if transient.global_vehicle_id is not None or store.summary().vehicle_count != 0:
+            raise RuntimeError("transient Auto Track selection wrote to Identity DB")
+
+        vehicle_id = store.create_vehicle(detection)
+        identity, score = manager.select_stored_vehicle(vehicle_id, [detection], frame)
+        store.close()
+
+    if identity is None or identity.last_track_id != detection.track_id:
+        raise RuntimeError("GID selection failed to reacquire visible local track")
+    return f"transient_gid={transient.global_vehicle_id}; reacquire_score={score:.2f}"
 
 
 def check_video_input_pipeline() -> str:
