@@ -57,7 +57,8 @@ class AppConfig:
     log_dir: Path = Path("outputs")
     identity_db_path: Path = Path("outputs") / "vehicle_identity.sqlite3"
     model_dir: Path = Path(__file__).resolve().parents[1] / "model"
-    default_model: str = "yolo11n.pt"
+    default_model: str = "yolo26s.pt"
+    default_reid_model: str = "yolo26s-reid.onnx"
 
 
 class AutoCamTrackerApp:
@@ -73,7 +74,10 @@ class AutoCamTrackerApp:
         self.detector: VideoDetector | None = None
         self.store = DetectionStore()
         self.identity_store = VehicleIdentityStore(self.config.identity_db_path)
-        self.feature_gallery = FeatureGallery(self.config.identity_db_path)
+        self.feature_gallery = FeatureGallery(
+            self.config.identity_db_path,
+            reid_model_path=str(self.config.model_dir / self.config.default_reid_model),
+        )
         self.identity_manager = GlobalIdentityManager(
             identity_store=self.identity_store,
             feature_gallery=self.feature_gallery,
@@ -100,6 +104,7 @@ class AutoCamTrackerApp:
         self.skipped_frames = 0
         self.last_inference_time_ms = 0.0
         self.model_options: dict[str, str] = {}
+        self.reid_model_options: dict[str, str] = {}
         self.active_input_signature: tuple[object, ...] | None = None
         self.last_frame_shape: tuple[int, int, int] | tuple[int, int] | None = None
         self.last_raw_frame = None
@@ -111,12 +116,14 @@ class AutoCamTrackerApp:
         self.timeline_dragging = False
         self.refreshing_identity_panel = False
         self.link_bbox_vehicle_id: int | None = None
+        self.selected_identity_tree_ids: set[int] = set()
 
         self.before_image_ref = None
         self.after_image_ref = None
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.refresh_model_options()
+        self.refresh_reid_model_options()
 
     def _build_ui(self) -> None:
         main = ttk.Frame(self.root, padding=10)
@@ -133,16 +140,17 @@ class AutoCamTrackerApp:
         tracking_controls.grid(row=0, column=1, sticky="nsew", padx=4, pady=4)
         playback_controls = ttk.LabelFrame(controls, text="Playback", padding=8)
         playback_controls.grid(row=0, column=2, sticky="nsew", padx=4, pady=4)
-        identity_controls = ttk.LabelFrame(controls, text="Identity DB", padding=8)
-        identity_controls.grid(row=0, column=3, sticky="nsew", padx=4, pady=4)
+        identity_controls = ttk.LabelFrame(controls, text="Identity DB", padding=6)
+        identity_controls.grid(row=0, column=3, sticky="nw", padx=4, pady=4)
         for column in range(3):
             controls.columnconfigure(column, weight=0, minsize=207)
-        controls.columnconfigure(3, weight=1, minsize=245)
+        controls.columnconfigure(3, weight=0, minsize=490)
 
         self.source_var = tk.StringVar(value="webcam")
         self.tracker_var = tk.StringVar(value="botsort")
         self.framing_var = tk.StringVar(value="medium")
         self.model_var = tk.StringVar(value=self.config.default_model)
+        self.reid_model_var = tk.StringVar(value=self.config.default_reid_model)
         self.playback_speed_var = tk.StringVar(value="1x")
         self.camera_index_var = tk.StringVar(value="0")
         self.video_path_var = tk.StringVar(value="No video selected")
@@ -228,17 +236,17 @@ class AutoCamTrackerApp:
         playback_controls.columnconfigure(0, weight=1)
         playback_controls.columnconfigure(1, weight=1)
 
-        ttk.Label(identity_controls, textvariable=self.identity_summary_var).grid(row=0, column=0, sticky="w", padx=4)
-        ttk.Button(identity_controls, text="Refresh", command=self.refresh_identity_db_panel).grid(row=0, column=1, sticky="ew", padx=4)
-        ttk.Button(identity_controls, text="Find GID", command=self.track_selected_identity_from_db).grid(row=0, column=2, sticky="ew", padx=4)
-        ttk.Button(identity_controls, text="Add Feature", command=self.add_feature_to_selected_identity).grid(row=0, column=3, sticky="ew", padx=4)
-        ttk.Button(identity_controls, text="Link BBox", command=self.start_link_bbox).grid(row=0, column=4, sticky="ew", padx=4)
-        ttk.Button(identity_controls, text="Delete ID", command=self.delete_selected_identity).grid(row=0, column=5, sticky="ew", padx=4)
+        ttk.Label(identity_controls, textvariable=self.identity_summary_var).grid(row=0, column=0, columnspan=4, sticky="w", padx=3)
+        ttk.Button(identity_controls, text="Refresh", width=9, command=self.refresh_identity_db_panel).grid(row=0, column=4, sticky="ew", padx=2)
+        ttk.Button(identity_controls, text="Delete ID", width=9, command=self.delete_selected_identity).grid(row=0, column=5, sticky="ew", padx=2)
+        ttk.Button(identity_controls, text="Add Feature", width=11, command=self.add_feature_to_selected_identity).grid(row=1, column=0, columnspan=2, sticky="ew", padx=2, pady=(4, 0))
+        ttk.Button(identity_controls, text="Link BBox", width=10, command=self.start_link_bbox).grid(row=1, column=2, columnspan=2, sticky="ew", padx=2, pady=(4, 0))
+        ttk.Button(identity_controls, text="Find GID", width=9, command=self.track_selected_identity_from_db).grid(row=1, column=4, columnspan=2, sticky="ew", padx=2, pady=(4, 0))
         self.identity_tree = ttk.Treeview(
             identity_controls,
             columns=("gid", "type", "lid", "master", "pending", "candidate", "frame", "conf"),
             show="headings",
-            height=5,
+            height=4,
         )
         headings = {
             "gid": "GID",
@@ -250,30 +258,39 @@ class AutoCamTrackerApp:
             "frame": "Frame",
             "conf": "DetConf",
         }
-        widths = {
-            "gid": 44,
-            "type": 68,
-            "lid": 48,
-            "master": 58,
-            "pending": 62,
-            "candidate": 72,
-            "frame": 58,
-            "conf": 52,
-        }
+        widths = {"gid": 42, "type": 58, "lid": 42, "master": 52, "pending": 58, "candidate": 66, "frame": 54, "conf": 50}
         for column, label in headings.items():
             self.identity_tree.heading(column, text=label)
             self.identity_tree.column(column, width=widths[column], minwidth=36, anchor="center", stretch=False)
         self.identity_tree.tag_configure("selected", background="#d7ecff")
+        self.identity_tree.tag_configure("tree_selected", background="#b9dcff")
         self.identity_tree.tag_configure("no_master", background="#fff4cc")
+        self.identity_tree.bind("<<TreeviewSelect>>", self.on_identity_tree_select)
         self.identity_tree.bind("<Double-1>", self.edit_identity_display_name)
         self.identity_tree.bind("<Delete>", self.delete_selected_identity)
         self.identity_tree.bind("<BackSpace>", self.delete_selected_identity)
-        self.identity_tree.grid(row=1, column=0, columnspan=6, sticky="nsew", padx=4, pady=(8, 0))
-        identity_controls.columnconfigure(0, weight=1)
-        identity_controls.columnconfigure(1, weight=1)
-        for column in range(2, 6):
+        self.identity_tree.grid(row=2, column=0, columnspan=6, sticky="nw", padx=3, pady=(6, 0))
+        ttk.Label(identity_controls, text="ReID Model").grid(row=3, column=0, sticky="w", padx=3, pady=(6, 0))
+        self.reid_model_box = ttk.Combobox(
+            identity_controls,
+            textvariable=self.reid_model_var,
+            values=[],
+            width=18,
+            state="readonly",
+        )
+        self.reid_model_box.grid(row=3, column=1, columnspan=3, sticky="ew", padx=3, pady=(6, 0))
+        self.reid_model_box.bind("<<ComboboxSelected>>", lambda _: self.apply_reid_model_config())
+        ttk.Button(identity_controls, text="Refresh Models", width=15, command=self.refresh_reid_model_options).grid(
+            row=3,
+            column=4,
+            columnspan=2,
+            sticky="ew",
+            padx=3,
+            pady=(6, 0),
+        )
+        for column in range(6):
             identity_controls.columnconfigure(column, weight=0)
-        identity_controls.rowconfigure(1, weight=1)
+        identity_controls.rowconfigure(2, weight=0)
 
         main.columnconfigure(0, weight=1)
         main.columnconfigure(1, weight=1)
@@ -319,6 +336,14 @@ class AutoCamTrackerApp:
     def apply_ui_config(self) -> None:
         self.input_config = self._ui_input_config()
         self.reframer.set_framing_mode(self.framing_var.get())
+
+    def apply_reid_model_config(self) -> None:
+        model_path = self.reid_model_options.get(
+            self.reid_model_var.get(),
+            str(self.config.model_dir / self.reid_model_var.get()),
+        )
+        self.feature_gallery.set_reid_model(model_path)
+        self.status_var.set(f"Status: ReID model set to {self.reid_model_var.get()}")
 
     def _ui_input_config(self) -> InputConfig:
         try:
@@ -424,6 +449,25 @@ class AutoCamTrackerApp:
             self.model_box.configure(values=list(self.model_options.keys()))
         if self.model_var.get() not in self.model_options:
             self.model_var.set(next(iter(self.model_options)))
+
+    def refresh_reid_model_options(self) -> None:
+        asset_names = [
+            "yolo26n-reid.onnx",
+            "yolo26s-reid.onnx",
+            "yolo26m-reid.onnx",
+            "yolo26l-reid.onnx",
+            "yolo26x-reid.onnx",
+        ]
+        options = {name: str(self.config.model_dir / name) for name in asset_names}
+        if self.config.model_dir.exists():
+            for path in sorted(self.config.model_dir.rglob("*-reid.onnx")):
+                options[self._model_label(path)] = str(path)
+        self.reid_model_options = options
+        if hasattr(self, "reid_model_box"):
+            self.reid_model_box.configure(values=list(self.reid_model_options.keys()))
+        if self.reid_model_var.get() not in self.reid_model_options:
+            self.reid_model_var.set(self.config.default_reid_model)
+        self.apply_reid_model_config()
 
     def select_screen_region(self) -> None:
         self.pause()
@@ -799,6 +843,7 @@ class AutoCamTrackerApp:
         if not hasattr(self, "identity_tree"):
             return
         self.refreshing_identity_panel = True
+        selected_tree_ids = set(self.selected_identity_tree_ids)
         summary = self.identity_store.summary(feature_counts=self.feature_gallery.summary_by_vehicle())
         self.identity_summary_var.set(
             "Vehicles: "
@@ -811,7 +856,9 @@ class AutoCamTrackerApp:
         selected_gid = self.identity_manager.selected_global_vehicle_id
         for vehicle in summary.vehicles:
             tags: tuple[str, ...] = ()
-            if vehicle.vehicle_id == selected_gid:
+            if vehicle.vehicle_id in selected_tree_ids:
+                tags = ("tree_selected",)
+            elif vehicle.vehicle_id == selected_gid:
                 tags = ("selected",)
             elif vehicle.master_feature_count <= 0:
                 tags = ("no_master",)
@@ -831,7 +878,33 @@ class AutoCamTrackerApp:
                 ),
                 tags=tags,
             )
+        existing_items = set(self.identity_tree.get_children())
+        restore_selection = [str(vehicle_id) for vehicle_id in selected_tree_ids if str(vehicle_id) in existing_items]
+        if restore_selection:
+            self.identity_tree.selection_set(restore_selection)
         self.refreshing_identity_panel = False
+
+    def on_identity_tree_select(self, _event=None) -> str:
+        if self.refreshing_identity_panel:
+            return "break"
+        self.selected_identity_tree_ids = set(self._selected_identity_vehicle_ids())
+        selected_gid = self.identity_manager.selected_global_vehicle_id
+        for item in self.identity_tree.get_children():
+            try:
+                vehicle_id = int(item)
+                master_count = int(self.identity_tree.set(item, "master") or 0)
+            except ValueError:
+                continue
+
+            tags: tuple[str, ...] = ()
+            if vehicle_id in self.selected_identity_tree_ids:
+                tags = ("tree_selected",)
+            elif vehicle_id == selected_gid:
+                tags = ("selected",)
+            elif master_count <= 0:
+                tags = ("no_master",)
+            self.identity_tree.item(item, tags=tags)
+        return "break"
 
     def track_selected_identity_from_db(self, _event=None) -> str:
         if self.refreshing_identity_panel:
@@ -859,7 +932,7 @@ class AutoCamTrackerApp:
         label = self.identity_store.display_label(vehicle_id)
         if identity.last_track_id is None:
             self.status_var.set(
-                f"Status: selected DB vehicle {label}; searching current frame match "
+                f"Status: no Master feature match for GID {label}; searching "
                 f"(score {score:.2f})"
             )
         else:

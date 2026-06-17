@@ -6,10 +6,12 @@ AutoCamTracker 是一個以影片、螢幕區域或 webcam 作為輸入的車輛
 
 - 支援 webcam、影片檔、螢幕區域三種輸入來源。
 - 支援 YOLO 模型偵測車輛，並顯示 bbox、track id、confidence。
+- 預設 detection / tracking 模型為 `yolo26s.pt`。
+- 預設 Identity ReID 模型為 `yolo26s-reid.onnx`。
 - 可在 Before 畫面直接點選 bbox，或使用 Auto Track 選擇追蹤車輛。
 - Identity DB 會記錄車輛全域 ID、最後 bbox、最後 local track 與基本 metadata。
 - Feature Gallery 提供 Master / Pending / Candidate 結構；正式 ReID 身份來源只使用 Master。
-- `Add Feature` 會手動把目前可見 bbox 的 ReID snapshot 加入 Master，每台車最多 30 張。
+- `Add Feature` 會手動把目前可見 bbox 的 ReID snapshot 加入 Master，每台車最多 500 張。
 - `Find GID` 會手動使用 Master Gallery Top-K matching 找回目前畫面中的同一台車。
 - `Link BBox` 可在 feature 不足時，先選 GID 再手動把目前 bbox 綁到同一台車。
 - 支援雙擊 GID 欄位自訂車輛 ID 顯示名稱。
@@ -70,10 +72,12 @@ AutoCamTracker is a vehicle detection and tracking desktop tool that can use a v
 
 - Supports three input sources: webcam, video file, and screen region.
 - Uses YOLO models to detect vehicles and display bbox, track id, and confidence.
+- Defaults to `yolo26s.pt` for detection / tracking.
+- Defaults to `yolo26s-reid.onnx` for Identity ReID.
 - Allows target selection by clicking a bbox in the Before view or by using Auto Track.
 - Records global vehicle IDs, last bbox, last local track, and basic metadata in the Identity DB.
 - Adds a Master / Pending / Candidate Feature Gallery; only Master is the official ReID identity source.
-- `Add Feature` manually adds the current visible bbox snapshot to Master, capped at 30 features per vehicle.
+- `Add Feature` manually adds the current visible bbox snapshot to Master, capped at 500 features per vehicle.
 - `Find GID` manually uses Master Gallery Top-K matching to recover the selected vehicle in the current frame.
 - `Link BBox` lets the user manually bind a visible bbox to an existing GID when feature coverage is not enough.
 - Allows editing the displayed GID label by double-clicking the GID column.

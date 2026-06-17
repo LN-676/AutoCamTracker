@@ -10,10 +10,10 @@ from time import time
 from typing import Any, Literal, Protocol
 
 try:
-    from reid_embedding import ReIDEmbeddingExtractor
+    from reid_embedding import ReIDEmbeddingConfig, ReIDEmbeddingExtractor
     from video_detector import TrackedDetection
 except ImportError:  # pragma: no cover
-    from .reid_embedding import ReIDEmbeddingExtractor
+    from .reid_embedding import ReIDEmbeddingConfig, ReIDEmbeddingExtractor
     from .video_detector import TrackedDetection
 
 
@@ -116,11 +116,12 @@ class MilvusFeatureIndex:
 class FeatureGallery:
     """SQLite default gallery. Master features are written only by Add Feature."""
 
-    MASTER_FEATURE_LIMIT = 30
+    MASTER_FEATURE_LIMIT = 500
 
     def __init__(
         self,
         db_path: Path | str,
+        reid_model_path: str = "yolo26s-reid.onnx",
         duplicate_threshold: float = 0.985,
         min_match_score: float = 0.72,
     ) -> None:
@@ -128,6 +129,7 @@ class FeatureGallery:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(self.db_path)
         self.connection.row_factory = sqlite3.Row
+        self.reid_model_path = reid_model_path
         self.duplicate_threshold = duplicate_threshold
         self.min_match_score = min_match_score
         self.embedding_extractor: ReIDEmbeddingExtractor | None = None
@@ -135,6 +137,12 @@ class FeatureGallery:
 
     def close(self) -> None:
         self.connection.close()
+
+    def set_reid_model(self, model_path: str) -> None:
+        if model_path == self.reid_model_path:
+            return
+        self.reid_model_path = model_path
+        self.embedding_extractor = None
 
     def add_master_feature(
         self,
@@ -453,7 +461,7 @@ class FeatureGallery:
 
     def _extract_embedding(self, frame, detection: TrackedDetection) -> list[float] | None:
         if self.embedding_extractor is None:
-            self.embedding_extractor = ReIDEmbeddingExtractor()
+            self.embedding_extractor = ReIDEmbeddingExtractor(ReIDEmbeddingConfig(model_path=self.reid_model_path))
         return self.embedding_extractor.extract(frame, detection.bbox)
 
     def _ensure_schema(self) -> None:

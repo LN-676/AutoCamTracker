@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+MODEL_DIR = PROJECT_ROOT / "code" / "model"
 
 
 @dataclass
 class ReIDEmbeddingConfig:
-    model_path: str = "yolo26n-reid.onnx"
+    model_path: str = "yolo26s-reid.onnx"
     enabled: bool = True
 
 
@@ -50,9 +55,20 @@ class ReIDEmbeddingExtractor:
         try:
             from ultralytics.trackers.utils.reid import ReID
 
-            self.encoder = ReID(self.config.model_path)
+            self.encoder = ReID(str(self._resolve_model_path(self.config.model_path)))
             self.available = True
         except Exception as exc:
             self.encoder = None
             self.available = False
             self.error = str(exc)
+
+    @staticmethod
+    def _resolve_model_path(model_path: str) -> Path | str:
+        path = Path(model_path).expanduser()
+        if path.is_absolute():
+            return path
+        candidates = [MODEL_DIR / path, PROJECT_ROOT / path, Path.cwd() / path, path]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate.resolve()
+        return model_path

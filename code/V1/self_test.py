@@ -14,7 +14,7 @@ import traceback
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-MODEL_PATH = PROJECT_ROOT / "code" / "model" / "yolo11n.pt"
+MODEL_PATH = PROJECT_ROOT / "code" / "model" / "yolo26s.pt"
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
 TEST_VIDEO = OUTPUT_DIR / "self_test_input.mp4"
 
@@ -80,7 +80,7 @@ def check_model_load() -> str:
 
     detector = VideoDetector(
         InputConfig(
-            model_path="yolo11n.pt",
+            model_path="yolo26s.pt",
             tracker_name="deepocsort",
             source_type="video_file",
         )
@@ -203,9 +203,9 @@ def check_identity_manager() -> str:
         identity, score = manager.select_stored_vehicle(vehicle_id, [detection], frame)
         store.close()
 
-    if identity is None or identity.last_track_id != detection.track_id:
-        raise RuntimeError("GID selection failed to reacquire visible local track")
-    return f"transient_gid={transient.global_vehicle_id}; reacquire_score={score:.2f}"
+    if identity is None or identity.last_track_id is not None or manager.status != "searching":
+        raise RuntimeError("GID selection used local track fallback without master feature")
+    return f"transient_gid={transient.global_vehicle_id}; masterless_score={score:.2f}"
 
 
 def check_video_input_pipeline() -> str:
@@ -237,7 +237,7 @@ def check_video_input_pipeline() -> str:
         InputConfig(
             source_type="video_file",
             video_path=str(TEST_VIDEO),
-            model_path="yolo11n.pt",
+            model_path="yolo26s.pt",
             tracker_name="deepocsort",
         )
     )

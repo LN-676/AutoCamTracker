@@ -53,7 +53,7 @@ class InputConfig:
     video_path: str | None = None
     video_url: str | None = None
     screen_region: tuple[int, int, int, int] | None = None
-    model_path: str = "yolo11n.pt"
+    model_path: str = "yolo26s.pt"
     tracker_name: TrackerName = "botsort"
     confidence_threshold: float = 0.20
     iou_threshold: float = 0.65
