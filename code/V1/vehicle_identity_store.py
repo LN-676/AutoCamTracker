@@ -55,7 +55,7 @@ class IdentityStoreSummary:
 class VehicleIdentityStore:
     """SQLite-backed store for GID, last bbox, and basic vehicle metadata.
 
-    V1.21 intentionally keeps embeddings out of this class. ReID features live
+    V1.3 intentionally keeps embeddings out of this class. ReID features live
     in FeatureGallery and are written only by explicit Add Feature actions.
     """
 

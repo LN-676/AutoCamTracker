@@ -1,4 +1,4 @@
-"""Manual vehicle ReID feature gallery for AutoCamTracker V1.21."""
+"""Manual vehicle ReID feature gallery for AutoCamTracker V1.3."""
 
 from __future__ import annotations
 

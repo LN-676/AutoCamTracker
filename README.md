@@ -1,6 +1,6 @@
-# AutoCamTracker V1.21
+# AutoCamTracker V1.3
 
-AutoCamTracker 是一個以影片、螢幕區域或 webcam 作為輸入的車輛偵測與追蹤工具。V1.21 將 ReID 改為手動控管的 Master Feature Gallery：YOLO 只做偵測，tracker 預設使用普通 BoT-SORT，Identity DB 只保存 GID、最後 bbox 與基本 metadata。
+AutoCamTracker 是一個以影片、螢幕區域或 webcam 作為輸入的車輛偵測與追蹤工具。V1.3 將 ReID 改為手動控管的 Master Feature Gallery：YOLO 只做偵測，tracker 預設使用普通 BoT-SORT，Identity DB 只保存 GID、最後 bbox 與基本 metadata。
 
 ## 功能簡述
 
@@ -53,9 +53,9 @@ AutoCamTracker 是一個以影片、螢幕區域或 webcam 作為輸入的車輛
 8. 若要用 GID 找回車輛，選 GID 後按 `Find GID`。
 9. 在 After 畫面確認追蹤構圖結果。
 
-## V1.21 注意事項
+## V1.3 注意事項
 
-- V1.21 仍以單一車輛追蹤與互動式重新辨識為主。
+- V1.3 仍以單一車輛追蹤與互動式重新辨識為主。
 - `LID` 是 YOLO / tracker 的短期本地 ID；`GID` 是 AutoCamTracker 的長期車輛身份。
 - ReID 模型只會在 `Add Feature` 或手動 `Find GID` 時執行。
 - 點 bbox、每幀追蹤、UI refresh 都不會自動寫 feature，避免髒資料進入 Master Gallery。
@@ -64,9 +64,9 @@ AutoCamTracker 是一個以影片、螢幕區域或 webcam 作為輸入的車輛
 
 ---
 
-# AutoCamTracker V1.21 English
+# AutoCamTracker V1.3 English
 
-AutoCamTracker is a vehicle detection and tracking desktop tool that can use a video file, a selected screen region, or a webcam as the input source. V1.21 moves ReID into a manually curated Master Feature Gallery: YOLO only detects, the tracker defaults to plain BoT-SORT, and the Identity DB stores only GID, last bbox, and basic metadata.
+AutoCamTracker is a vehicle detection and tracking desktop tool that can use a video file, a selected screen region, or a webcam as the input source. V1.3 moves ReID into a manually curated Master Feature Gallery: YOLO only detects, the tracker defaults to plain BoT-SORT, and the Identity DB stores only GID, last bbox, and basic metadata.
 
 ## Feature Overview
 
@@ -119,9 +119,9 @@ Basic workflow:
 8. To recover a vehicle by GID, select the GID and click `Find GID`.
 9. Check the reframed tracking result in the After view.
 
-## V1.21 Notes
+## V1.3 Notes
 
-- V1.21 still focuses on single-vehicle tracking and interactive re-identification.
+- V1.3 still focuses on single-vehicle tracking and interactive re-identification.
 - `LID` is the short-term tracker ID; `GID` is AutoCamTracker's long-lived vehicle identity.
 - The ReID model runs only during `Add Feature` or manual `Find GID`.
 - Clicking a bbox, per-frame tracking, and UI refresh never auto-write features.
