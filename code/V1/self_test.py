@@ -252,11 +252,19 @@ def check_auto_feature_sampler() -> str:
         detection_store = DetectionStore()
         detection_store.update([detection], frame.shape)
         sampler = AutoFeatureSampler(gallery)
+        strict_area = None
+        sampler.set_mode("Strict")
+        strict_area = sampler.config.min_area_ratio
+        sampler.set_mode("Diverse")
+        diverse_area = sampler.config.min_area_ratio
+        sampler.set_mode("Balanced")
         result = sampler.start(vehicle_id, detection, frame, detection_store)
         counts = gallery.summary_by_vehicle()
         gallery.close()
         store.close()
 
+    if strict_area is None or not diverse_area < strict_area:
+        raise RuntimeError("auto feature modes did not loosen Diverse area gating")
     if not result.accepted or result.feature_id is None:
         raise RuntimeError(f"auto feature sampler failed: {result.reason}")
     if counts[vehicle_id].get("master", 0) != 1:

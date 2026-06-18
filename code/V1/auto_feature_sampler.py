@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 try:
     from detection_store import DetectionStore
@@ -14,17 +15,23 @@ except ImportError:  # pragma: no cover
     from .video_detector import TrackedDetection
 
 
+AutoFeatureMode = Literal["Balanced", "Diverse", "Strict"]
+
+
 @dataclass
 class AutoFeatureSamplerConfig:
-    min_quality_score: float = 0.65
-    min_detection_confidence: float = 0.55
-    min_area_ratio: float = 0.012
+    mode: AutoFeatureMode = "Balanced"
+    min_quality_score: float = 0.50
+    min_detection_confidence: float = 0.45
+    min_area_ratio: float = 0.004
     edge_margin_ratio: float = 0.015
-    min_interval_frames: int = 12
+    min_interval_frames: int = 8
     min_track_age_frames: int = 3
-    min_center_shift_ratio: float = 0.10
-    min_area_change_ratio: float = 0.22
-    min_brightness_delta: float = 18.0
+    min_center_shift_ratio: float = 0.08
+    min_area_change_ratio: float = 0.18
+    min_brightness_delta: float = 14.0
+    bucket_target: int = 3
+    duplicate_threshold: float = 0.995
 
 
 @dataclass
@@ -44,6 +51,9 @@ class _AcceptedSignature:
     area: float
     brightness: float
     frame_index: int
+    distance_bucket: str
+    light_bucket: str
+    position_bucket: str
 
 
 @dataclass
@@ -64,6 +74,7 @@ class AutoFeatureSampler:
         self.config = config or AutoFeatureSamplerConfig()
         self.active_vehicle_id: int | None = None
         self._states: dict[int, _VehicleSamplingState] = {}
+        self.set_mode(self.config.mode)
 
     def start(
         self,
@@ -78,8 +89,41 @@ class AutoFeatureSampler:
     def stop(self) -> None:
         self.active_vehicle_id = None
 
-    def set_quality_threshold(self, threshold: float) -> None:
-        self.config.min_quality_score = max(0.0, min(1.0, float(threshold)))
+    def set_mode(self, mode: AutoFeatureMode | str) -> None:
+        if mode not in {"Balanced", "Diverse", "Strict"}:
+            mode = "Balanced"
+        self.config.mode = mode  # type: ignore[assignment]
+        if mode == "Strict":
+            self.config.min_quality_score = 0.65
+            self.config.min_detection_confidence = 0.58
+            self.config.min_area_ratio = 0.012
+            self.config.min_interval_frames = 14
+            self.config.min_center_shift_ratio = 0.12
+            self.config.min_area_change_ratio = 0.24
+            self.config.min_brightness_delta = 22.0
+            self.config.bucket_target = 2
+            self.config.duplicate_threshold = 0.985
+        elif mode == "Diverse":
+            self.config.min_quality_score = 0.40
+            self.config.min_detection_confidence = 0.40
+            self.config.min_area_ratio = 0.003
+            self.config.min_interval_frames = 6
+            self.config.min_center_shift_ratio = 0.05
+            self.config.min_area_change_ratio = 0.12
+            self.config.min_brightness_delta = 10.0
+            self.config.bucket_target = 4
+            self.config.duplicate_threshold = 0.997
+        else:
+            self.config.min_quality_score = 0.50
+            self.config.min_detection_confidence = 0.45
+            self.config.min_area_ratio = 0.004
+            self.config.min_interval_frames = 8
+            self.config.min_center_shift_ratio = 0.08
+            self.config.min_area_change_ratio = 0.18
+            self.config.min_brightness_delta = 14.0
+            self.config.bucket_target = 3
+            self.config.duplicate_threshold = 0.995
+        self.feature_gallery.duplicate_threshold = self.config.duplicate_threshold
 
     def update(
         self,
@@ -125,13 +169,16 @@ class AutoFeatureSampler:
             area=self._area(detection.bbox),
             brightness=quality.brightness,
             frame_index=detection.frame_index,
+            distance_bucket=self._distance_bucket(detection.bbox, frame.shape),
+            light_bucket=self._light_bucket(quality.brightness),
+            position_bucket=self._position_bucket(detection.center, frame.shape),
         )
-        if not force and not self._is_diverse_enough(state, signature, frame.shape):
+        if not force and not self._should_accept_signature(state, signature, frame.shape):
             return AutoFeatureSampleResult(
                 True,
                 False,
                 vehicle_id,
-                "viewpoint/light change is not large enough",
+                "distance/viewpoint/light bucket already has enough similar samples",
                 quality_score=quality.score,
             )
 
@@ -171,13 +218,15 @@ class AutoFeatureSampler:
             return f"track age {age} is below {self.config.min_track_age_frames}"
         return None
 
-    def _is_diverse_enough(
+    def _should_accept_signature(
         self,
         state: _VehicleSamplingState,
         signature: _AcceptedSignature,
         frame_shape,
     ) -> bool:
         if not state.accepted:
+            return True
+        if self._bucket_count(state, signature) < self.config.bucket_target:
             return True
 
         frame_h, frame_w = frame_shape[:2]
@@ -196,6 +245,43 @@ class AutoFeatureSampler:
             ):
                 return True
         return False
+
+    @staticmethod
+    def _bucket_count(state: _VehicleSamplingState, signature: _AcceptedSignature) -> int:
+        return sum(
+            1
+            for previous in state.accepted
+            if previous.distance_bucket == signature.distance_bucket
+            and previous.light_bucket == signature.light_bucket
+            and previous.position_bucket == signature.position_bucket
+        )
+
+    def _distance_bucket(self, bbox: tuple[float, float, float, float], frame_shape) -> str:
+        frame_h, frame_w = frame_shape[:2]
+        area_ratio = self._area(bbox) / max(1.0, float(frame_w * frame_h))
+        if area_ratio < 0.015:
+            return "far"
+        if area_ratio > 0.08:
+            return "near"
+        return "mid"
+
+    @staticmethod
+    def _light_bucket(brightness: float) -> str:
+        if brightness < 85.0:
+            return "shadow"
+        if brightness > 165.0:
+            return "sun"
+        return "normal"
+
+    @staticmethod
+    def _position_bucket(center: tuple[float, float], frame_shape) -> str:
+        frame_h, frame_w = frame_shape[:2]
+        x_ratio = center[0] / max(1.0, float(frame_w))
+        if x_ratio < 0.38:
+            return "left"
+        if x_ratio > 0.62:
+            return "right"
+        return "center"
 
     def _near_frame_edge(
         self,

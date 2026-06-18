@@ -28,7 +28,7 @@ except ImportError:  # pragma: no cover
     ImageTk = None
 
 try:
-    from auto_feature_sampler import AutoFeatureSampler
+    from auto_feature_sampler import AutoFeatureMode, AutoFeatureSampler
     from video_detector import InputConfig, VideoDetector
     from detection_store import DetectionStore
     from feature_gallery import FeatureGallery
@@ -39,7 +39,7 @@ try:
     from scene_cut import SceneCutDetector
     from vehicle_identity_store import VehicleIdentityStore
 except ImportError:  # pragma: no cover
-    from .auto_feature_sampler import AutoFeatureSampler
+    from .auto_feature_sampler import AutoFeatureMode, AutoFeatureSampler
     from .video_detector import InputConfig, VideoDetector
     from .detection_store import DetectionStore
     from .feature_gallery import FeatureGallery
@@ -161,7 +161,7 @@ class AutoCamTrackerApp:
         self.model_var = tk.StringVar(value=self.config.default_model)
         self.reid_model_var = tk.StringVar(value=self.config.default_reid_model)
         self.auto_reid_threshold_var = tk.StringVar(value=f"{self.identity_manager.auto_reid_min_score:.2f}")
-        self.auto_feature_threshold_var = tk.StringVar(value=f"{self.auto_feature_sampler.config.min_quality_score:.2f}")
+        self.auto_feature_mode_var = tk.StringVar(value=self.auto_feature_sampler.config.mode)
         self.playback_speed_var = tk.StringVar(value="1x")
         self.camera_index_var = tk.StringVar(value="0")
         self.video_path_var = tk.StringVar(value="No video selected")
@@ -259,12 +259,16 @@ class AutoCamTrackerApp:
         threshold_entry.bind("<Return>", self.apply_auto_reid_threshold)
         threshold_entry.bind("<FocusOut>", self.apply_auto_reid_threshold)
         ttk.Label(identity_controls, text="0.00-1.00").grid(row=2, column=3, columnspan=3, sticky="w", padx=3, pady=(5, 0))
-        ttk.Label(identity_controls, text="Auto Feat Th").grid(row=3, column=0, columnspan=2, sticky="w", padx=3, pady=(5, 0))
-        feature_threshold_entry = ttk.Entry(identity_controls, textvariable=self.auto_feature_threshold_var, width=7)
-        feature_threshold_entry.grid(row=3, column=2, sticky="ew", padx=2, pady=(5, 0))
-        feature_threshold_entry.bind("<Return>", self.apply_auto_feature_threshold)
-        feature_threshold_entry.bind("<FocusOut>", self.apply_auto_feature_threshold)
-        ttk.Label(identity_controls, text="quality").grid(row=3, column=3, columnspan=3, sticky="w", padx=3, pady=(5, 0))
+        ttk.Label(identity_controls, text="Auto Feature Mode").grid(row=3, column=0, columnspan=3, sticky="w", padx=3, pady=(5, 0))
+        feature_mode_box = ttk.Combobox(
+            identity_controls,
+            textvariable=self.auto_feature_mode_var,
+            values=["Balanced", "Diverse", "Strict"],
+            width=10,
+            state="readonly",
+        )
+        feature_mode_box.grid(row=3, column=3, columnspan=3, sticky="ew", padx=3, pady=(5, 0))
+        feature_mode_box.bind("<<ComboboxSelected>>", self.apply_auto_feature_mode)
         self.identity_tree = ttk.Treeview(
             identity_controls,
             columns=("gid", "type", "lid", "master", "pending", "candidate", "frame", "conf"),
@@ -393,18 +397,16 @@ class AutoCamTrackerApp:
         self.status_var.set(f"Status: Auto ReID threshold set to {threshold:.2f}")
         return "break"
 
-    def apply_auto_feature_threshold(self, _event=None) -> str:
-        raw_value = self.auto_feature_threshold_var.get().strip()
-        try:
-            threshold = float(raw_value)
-        except ValueError:
-            threshold = self.auto_feature_sampler.config.min_quality_score
-
-        threshold = max(0.0, min(1.0, threshold))
-        self.auto_feature_sampler.set_quality_threshold(threshold)
-        self.auto_feature_threshold_var.set(f"{threshold:.2f}")
-        self._set_identity_mode(f"Auto feature threshold: {threshold:.2f}")
-        self.status_var.set(f"Status: Auto feature quality threshold set to {threshold:.2f}")
+    def apply_auto_feature_mode(self, _event=None) -> str:
+        mode = self.auto_feature_mode_var.get()
+        self.auto_feature_sampler.set_mode(mode)
+        self.auto_feature_mode_var.set(self.auto_feature_sampler.config.mode)
+        config = self.auto_feature_sampler.config
+        self._set_identity_mode(
+            f"Auto Feature Mode: {config.mode} "
+            f"(quality {config.min_quality_score:.2f}, area {config.min_area_ratio:.3f})"
+        )
+        self.status_var.set(f"Status: Auto Feature Mode set to {config.mode}")
         return "break"
 
     def _set_identity_mode(self, message: str) -> None:
