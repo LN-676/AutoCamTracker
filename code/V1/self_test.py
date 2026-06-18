@@ -259,6 +259,18 @@ def check_auto_feature_sampler() -> str:
         diverse_area = sampler.config.min_area_ratio
         sampler.set_mode("Balanced")
         result = sampler.start(vehicle_id, detection, frame, detection_store)
+        truck_detection = TrackedDetection(
+            track_id=41,
+            bbox=(80.0, 50.0, 220.0, 160.0),
+            class_id=7,
+            class_name="truck",
+            confidence=0.92,
+            center=(150.0, 105.0),
+            frame_index=30,
+            timestamp=4.0,
+            tracker_name="botsort",
+        )
+        class_reject = sampler.sample(vehicle_id, truck_detection, frame, detection_store, force=True)
         counts = gallery.summary_by_vehicle()
         gallery.close()
         store.close()
@@ -267,6 +279,8 @@ def check_auto_feature_sampler() -> str:
         raise RuntimeError("auto feature modes did not loosen Diverse area gating")
     if not result.accepted or result.feature_id is None:
         raise RuntimeError(f"auto feature sampler failed: {result.reason}")
+    if class_reject.accepted:
+        raise RuntimeError("auto feature sampler accepted a mismatched class into Master")
     if counts[vehicle_id].get("master", 0) != 1:
         raise RuntimeError("auto feature sampler did not write a master feature")
     return f"vehicle_id={vehicle_id}; feature={result.feature_id}; quality={result.quality_score:.2f}"

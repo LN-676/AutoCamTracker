@@ -299,6 +299,22 @@ class FeatureGallery:
         ).fetchone()
         return bool(row and int(row["feature_count"]) > 0)
 
+    def dominant_master_class(self, vehicle_id: int) -> str | None:
+        row = self.connection.execute(
+            """
+            SELECT json_extract(metadata_json, '$.class_name') AS class_name, COUNT(*) AS feature_count
+            FROM vehicle_features
+            WHERE vehicle_id = ?
+              AND gallery_type = 'master'
+              AND json_extract(metadata_json, '$.class_name') IS NOT NULL
+            GROUP BY class_name
+            ORDER BY feature_count DESC, class_name ASC
+            LIMIT 1
+            """,
+            (vehicle_id,),
+        ).fetchone()
+        return str(row["class_name"]) if row and row["class_name"] else None
+
     def summary_by_vehicle(self) -> dict[int, dict[str, int]]:
         rows = self.connection.execute(
             """

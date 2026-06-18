@@ -148,12 +148,12 @@ class AutoCamTrackerApp:
         tracking_controls = ttk.LabelFrame(controls, text="Tracking", padding=8)
         tracking_controls.grid(row=0, column=1, sticky="nsew", padx=4, pady=4)
         playback_controls = ttk.LabelFrame(controls, text="Playback", padding=8)
-        playback_controls.grid(row=0, column=2, sticky="nsew", padx=4, pady=4)
+        playback_controls.grid(row=1, column=1, sticky="nsew", padx=4, pady=4)
         identity_controls = ttk.LabelFrame(controls, text="Identity DB", padding=6)
-        identity_controls.grid(row=0, column=3, sticky="nw", padx=4, pady=4)
-        for column in range(3):
+        identity_controls.grid(row=0, column=2, rowspan=2, sticky="nw", padx=4, pady=4)
+        for column in range(2):
             controls.columnconfigure(column, weight=0, minsize=207)
-        controls.columnconfigure(3, weight=0, minsize=414)
+        controls.columnconfigure(2, weight=0, minsize=414)
 
         self.source_var = tk.StringVar(value="webcam")
         self.tracker_var = tk.StringVar(value="botsort")

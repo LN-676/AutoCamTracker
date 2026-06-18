@@ -32,6 +32,7 @@ class AutoFeatureSamplerConfig:
     min_brightness_delta: float = 14.0
     bucket_target: int = 3
     duplicate_threshold: float = 0.995
+    min_master_match_score: float = 0.72
 
 
 @dataclass
@@ -103,6 +104,7 @@ class AutoFeatureSampler:
             self.config.min_brightness_delta = 22.0
             self.config.bucket_target = 2
             self.config.duplicate_threshold = 0.985
+            self.config.min_master_match_score = 0.78
         elif mode == "Diverse":
             self.config.min_quality_score = 0.40
             self.config.min_detection_confidence = 0.40
@@ -113,6 +115,7 @@ class AutoFeatureSampler:
             self.config.min_brightness_delta = 10.0
             self.config.bucket_target = 4
             self.config.duplicate_threshold = 0.997
+            self.config.min_master_match_score = 0.72
         else:
             self.config.min_quality_score = 0.50
             self.config.min_detection_confidence = 0.45
@@ -123,6 +126,7 @@ class AutoFeatureSampler:
             self.config.min_brightness_delta = 14.0
             self.config.bucket_target = 3
             self.config.duplicate_threshold = 0.995
+            self.config.min_master_match_score = 0.74
         self.feature_gallery.duplicate_threshold = self.config.duplicate_threshold
 
     def update(
@@ -164,6 +168,10 @@ class AutoFeatureSampler:
                 quality_score=quality.score,
             )
 
+        reason = self._identity_gate_reason(vehicle_id, detection, frame)
+        if reason is not None:
+            return AutoFeatureSampleResult(True, False, vehicle_id, reason, quality_score=quality.score)
+
         signature = _AcceptedSignature(
             center=detection.center,
             area=self._area(detection.bbox),
@@ -187,6 +195,23 @@ class AutoFeatureSampler:
             state.accepted.append(signature)
             state.accepted = state.accepted[-80:]
         return self._from_feature_result(result)
+
+    def _identity_gate_reason(self, vehicle_id: int, detection: TrackedDetection, frame) -> str | None:
+        if not self.feature_gallery.has_master_features(vehicle_id):
+            return None
+
+        dominant_class = self.feature_gallery.dominant_master_class(vehicle_id)
+        if dominant_class is not None and detection.class_name != dominant_class:
+            return f"class {detection.class_name} does not match GID master class {dominant_class}"
+
+        ranked = self.feature_gallery.rank_detections_for_vehicle(vehicle_id, [detection], frame, top_k=3)
+        score = ranked[0].score if ranked else 0.0
+        if score < self.config.min_master_match_score:
+            return (
+                f"ReID score {score:.2f} below auto feature identity threshold "
+                f"{self.config.min_master_match_score:.2f}"
+            )
+        return None
 
     def _gate_reason(
         self,
