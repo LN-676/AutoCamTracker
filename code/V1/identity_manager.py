@@ -182,6 +182,11 @@ class GlobalIdentityManager:
         self.status = "idle"
         self.last_reacquire_score = 0.0
         self.camera_cut_seen = False
+        self.auto_reid_min_score = 0.72
+        self.auto_reid_margin = 0.08
+        self.auto_reid_confirm_frames = 3
+        self._auto_reid_pending_track_id: int | None = None
+        self._auto_reid_pending_count = 0
 
     @property
     def selected_global_vehicle_id(self) -> int | None:
@@ -201,6 +206,11 @@ class GlobalIdentityManager:
         self.last_reacquire_score = 0.0
         self.camera_cut_seen = False
         self.reacquire.reset_pending()
+        self._reset_auto_reid_pending()
+
+    def set_auto_reid_threshold(self, min_score: float) -> None:
+        self.auto_reid_min_score = max(0.0, min(1.0, float(min_score)))
+        self._reset_auto_reid_pending()
 
     def select_detection(self, detection: TrackedDetection, frame, persist: bool = True) -> VehicleIdentity:
         color_signature = self.reacquire.color_signature(frame, detection.bbox)
@@ -211,6 +221,7 @@ class GlobalIdentityManager:
         self.last_reacquire_score = 1.0
         self.camera_cut_seen = False
         self.reacquire.reset_pending()
+        self._reset_auto_reid_pending()
         return identity
 
     def link_detection(self, vehicle_id: int, detection: TrackedDetection, frame) -> VehicleIdentity | None:
@@ -225,6 +236,7 @@ class GlobalIdentityManager:
         self.last_reacquire_score = 1.0
         self.camera_cut_seen = False
         self.reacquire.reset_pending()
+        self._reset_auto_reid_pending()
         return identity
 
     def select_stored_vehicle(
@@ -255,6 +267,7 @@ class GlobalIdentityManager:
             self.last_reacquire_score = best.score
             self.camera_cut_seen = False
             self.reacquire.reset_pending()
+            self._reset_auto_reid_pending()
             if self.identity_store is not None:
                 self.identity_store.update_vehicle(vehicle_id, best.detection, {"matched_by": "master_feature_gallery"})
             return identity, best.score
@@ -278,6 +291,7 @@ class GlobalIdentityManager:
         self.last_reacquire_score = best.score if best is not None else 0.0
         self.camera_cut_seen = False
         self.reacquire.reset_pending()
+        self._reset_auto_reid_pending()
         return identity, self.last_reacquire_score
 
     def handle_camera_cut(self) -> None:
@@ -288,6 +302,7 @@ class GlobalIdentityManager:
         self.status = "camera_cut"
         self.camera_cut_seen = True
         self.reacquire.reset_pending()
+        self._reset_auto_reid_pending()
 
     def update(self, detections: list[TrackedDetection], frame) -> list[SelectedTarget]:
         if self.selected_identity is None:
@@ -297,10 +312,13 @@ class GlobalIdentityManager:
 
         target = self._find_by_current_track(detections)
         if target is None:
-            target, score = self.reacquire.choose(self.selected_identity, detections, frame)
+            target, score = self._choose_auto_reid_target(detections, frame)
+            if target is None and not self._selected_gid_has_master_features():
+                target, score = self.reacquire.choose(self.selected_identity, detections, frame)
             self.last_reacquire_score = score
         else:
             self.last_reacquire_score = 1.0
+            self._reset_auto_reid_pending()
 
         if target is not None:
             self._update_identity(target, frame)
@@ -321,6 +339,64 @@ class GlobalIdentityManager:
             self.status = "tracking"
         identity.status = self.status
         return [self._selected_target_from_identity()]
+
+    def _choose_auto_reid_target(
+        self,
+        detections: list[TrackedDetection],
+        frame,
+    ) -> tuple[TrackedDetection | None, float]:
+        identity = self.selected_identity
+        if (
+            identity is None
+            or identity.global_vehicle_id is None
+            or self.feature_gallery is None
+            or not detections
+        ):
+            self._reset_auto_reid_pending()
+            return None, 0.0
+
+        ranked = self.feature_gallery.rank_detections_for_vehicle(
+            identity.global_vehicle_id,
+            detections,
+            frame,
+        )
+        if not ranked:
+            self._reset_auto_reid_pending()
+            return None, 0.0
+
+        best = ranked[0]
+        second_score = ranked[1].score if len(ranked) > 1 else 0.0
+        if (
+            best.score < self.auto_reid_min_score
+            or best.score - second_score < self.auto_reid_margin
+            or best.detection.track_id is None
+        ):
+            self._reset_auto_reid_pending()
+            return None, best.score
+
+        if best.detection.track_id == self._auto_reid_pending_track_id:
+            self._auto_reid_pending_count += 1
+        else:
+            self._auto_reid_pending_track_id = best.detection.track_id
+            self._auto_reid_pending_count = 1
+
+        if self._auto_reid_pending_count >= self.auto_reid_confirm_frames:
+            self._reset_auto_reid_pending()
+            return best.detection, best.score
+        return None, best.score
+
+    def _selected_gid_has_master_features(self) -> bool:
+        identity = self.selected_identity
+        return bool(
+            identity is not None
+            and identity.global_vehicle_id is not None
+            and self.feature_gallery is not None
+            and self.feature_gallery.has_master_features(identity.global_vehicle_id)
+        )
+
+    def _reset_auto_reid_pending(self) -> None:
+        self._auto_reid_pending_track_id = None
+        self._auto_reid_pending_count = 0
 
     def is_selected_detection(self, detection: TrackedDetection) -> bool:
         identity = self.selected_identity

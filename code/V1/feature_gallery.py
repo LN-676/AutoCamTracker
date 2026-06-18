@@ -318,6 +318,27 @@ class FeatureGallery:
         self.connection.commit()
         return int(cursor.rowcount or 0)
 
+    def first_feature_crop_jpeg(self, vehicle_id: int) -> bytes | None:
+        row = self.connection.execute(
+            """
+            SELECT crop_jpeg
+            FROM vehicle_features
+            WHERE vehicle_id = ?
+              AND crop_jpeg IS NOT NULL
+            ORDER BY
+              CASE gallery_type
+                WHEN 'master' THEN 0
+                WHEN 'candidate' THEN 1
+                ELSE 2
+              END,
+              created_at ASC,
+              id ASC
+            LIMIT 1
+            """,
+            (vehicle_id,),
+        ).fetchone()
+        return bytes(row["crop_jpeg"]) if row and row["crop_jpeg"] is not None else None
+
     def assess_crop_quality(self, frame, bbox: tuple[float, float, float, float]) -> CropQuality:
         import cv2
 

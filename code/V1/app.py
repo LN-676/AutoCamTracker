@@ -13,6 +13,7 @@ the other four modules.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from io import BytesIO
 from pathlib import Path
 import sys
 from time import time
@@ -117,6 +118,10 @@ class AutoCamTrackerApp:
         self.refreshing_identity_panel = False
         self.link_bbox_vehicle_id: int | None = None
         self.selected_identity_tree_ids: set[int] = set()
+        self.identity_preview_window: tk.Toplevel | None = None
+        self.identity_preview_label: ttk.Label | None = None
+        self.identity_preview_photo = None
+        self.identity_preview_vehicle_id: int | None = None
 
         self.before_image_ref = None
         self.after_image_ref = None
@@ -144,13 +149,14 @@ class AutoCamTrackerApp:
         identity_controls.grid(row=0, column=3, sticky="nw", padx=4, pady=4)
         for column in range(3):
             controls.columnconfigure(column, weight=0, minsize=207)
-        controls.columnconfigure(3, weight=0, minsize=490)
+        controls.columnconfigure(3, weight=0, minsize=452)
 
         self.source_var = tk.StringVar(value="webcam")
         self.tracker_var = tk.StringVar(value="botsort")
         self.framing_var = tk.StringVar(value="medium")
         self.model_var = tk.StringVar(value=self.config.default_model)
         self.reid_model_var = tk.StringVar(value=self.config.default_reid_model)
+        self.auto_reid_threshold_var = tk.StringVar(value=f"{self.identity_manager.auto_reid_min_score:.2f}")
         self.playback_speed_var = tk.StringVar(value="1x")
         self.camera_index_var = tk.StringVar(value="0")
         self.video_path_var = tk.StringVar(value="No video selected")
@@ -242,6 +248,12 @@ class AutoCamTrackerApp:
         ttk.Button(identity_controls, text="Add Feature", width=11, command=self.add_feature_to_selected_identity).grid(row=1, column=0, columnspan=2, sticky="ew", padx=2, pady=(4, 0))
         ttk.Button(identity_controls, text="Link BBox", width=10, command=self.start_link_bbox).grid(row=1, column=2, columnspan=2, sticky="ew", padx=2, pady=(4, 0))
         ttk.Button(identity_controls, text="Find GID", width=9, command=self.track_selected_identity_from_db).grid(row=1, column=4, columnspan=2, sticky="ew", padx=2, pady=(4, 0))
+        ttk.Label(identity_controls, text="Auto ReID Th").grid(row=2, column=0, columnspan=2, sticky="w", padx=3, pady=(5, 0))
+        threshold_entry = ttk.Entry(identity_controls, textvariable=self.auto_reid_threshold_var, width=7)
+        threshold_entry.grid(row=2, column=2, sticky="ew", padx=2, pady=(5, 0))
+        threshold_entry.bind("<Return>", self.apply_auto_reid_threshold)
+        threshold_entry.bind("<FocusOut>", self.apply_auto_reid_threshold)
+        ttk.Label(identity_controls, text="0.00-1.00").grid(row=2, column=3, columnspan=3, sticky="w", padx=3, pady=(5, 0))
         self.identity_tree = ttk.Treeview(
             identity_controls,
             columns=("gid", "type", "lid", "master", "pending", "candidate", "frame", "conf"),
@@ -258,7 +270,7 @@ class AutoCamTrackerApp:
             "frame": "Frame",
             "conf": "DetConf",
         }
-        widths = {"gid": 42, "type": 58, "lid": 42, "master": 52, "pending": 58, "candidate": 66, "frame": 54, "conf": 50}
+        widths = {"gid": 38, "type": 50, "lid": 38, "master": 48, "pending": 52, "candidate": 58, "frame": 48, "conf": 44}
         for column, label in headings.items():
             self.identity_tree.heading(column, text=label)
             self.identity_tree.column(column, width=widths[column], minwidth=36, anchor="center", stretch=False)
@@ -269,8 +281,10 @@ class AutoCamTrackerApp:
         self.identity_tree.bind("<Double-1>", self.edit_identity_display_name)
         self.identity_tree.bind("<Delete>", self.delete_selected_identity)
         self.identity_tree.bind("<BackSpace>", self.delete_selected_identity)
-        self.identity_tree.grid(row=2, column=0, columnspan=6, sticky="nw", padx=3, pady=(6, 0))
-        ttk.Label(identity_controls, text="ReID Model").grid(row=3, column=0, sticky="w", padx=3, pady=(6, 0))
+        self.identity_tree.bind("<Motion>", self.on_identity_tree_motion)
+        self.identity_tree.bind("<Leave>", self.hide_identity_preview)
+        self.identity_tree.grid(row=3, column=0, columnspan=6, sticky="nw", padx=3, pady=(6, 0))
+        ttk.Label(identity_controls, text="ReID Model").grid(row=4, column=0, sticky="w", padx=3, pady=(6, 0))
         self.reid_model_box = ttk.Combobox(
             identity_controls,
             textvariable=self.reid_model_var,
@@ -278,10 +292,10 @@ class AutoCamTrackerApp:
             width=18,
             state="readonly",
         )
-        self.reid_model_box.grid(row=3, column=1, columnspan=3, sticky="ew", padx=3, pady=(6, 0))
+        self.reid_model_box.grid(row=4, column=1, columnspan=3, sticky="ew", padx=3, pady=(6, 0))
         self.reid_model_box.bind("<<ComboboxSelected>>", lambda _: self.apply_reid_model_config())
         ttk.Button(identity_controls, text="Refresh Models", width=15, command=self.refresh_reid_model_options).grid(
-            row=3,
+            row=4,
             column=4,
             columnspan=2,
             sticky="ew",
@@ -290,7 +304,7 @@ class AutoCamTrackerApp:
         )
         for column in range(6):
             identity_controls.columnconfigure(column, weight=0)
-        identity_controls.rowconfigure(2, weight=0)
+        identity_controls.rowconfigure(3, weight=0)
 
         main.columnconfigure(0, weight=1)
         main.columnconfigure(1, weight=1)
@@ -344,6 +358,19 @@ class AutoCamTrackerApp:
         )
         self.feature_gallery.set_reid_model(model_path)
         self.status_var.set(f"Status: ReID model set to {self.reid_model_var.get()}")
+
+    def apply_auto_reid_threshold(self, _event=None) -> str:
+        raw_value = self.auto_reid_threshold_var.get().strip()
+        try:
+            threshold = float(raw_value)
+        except ValueError:
+            threshold = self.identity_manager.auto_reid_min_score
+
+        threshold = max(0.0, min(1.0, threshold))
+        self.identity_manager.set_auto_reid_threshold(threshold)
+        self.auto_reid_threshold_var.set(f"{threshold:.2f}")
+        self.status_var.set(f"Status: Auto ReID threshold set to {threshold:.2f}")
+        return "break"
 
     def _ui_input_config(self) -> InputConfig:
         try:
@@ -906,6 +933,57 @@ class AutoCamTrackerApp:
             self.identity_tree.item(item, tags=tags)
         return "break"
 
+    def on_identity_tree_motion(self, event) -> None:
+        item = self.identity_tree.identify_row(event.y)
+        if not item:
+            self.hide_identity_preview()
+            return
+        try:
+            vehicle_id = int(item)
+        except ValueError:
+            self.hide_identity_preview()
+            return
+        self.show_identity_preview(vehicle_id, event.x_root + 18, event.y_root + 12)
+
+    def show_identity_preview(self, vehicle_id: int, screen_x: int, screen_y: int) -> None:
+        if Image is None or ImageTk is None:
+            return
+        if self.identity_preview_vehicle_id == vehicle_id and self.identity_preview_window is not None:
+            self.identity_preview_window.geometry(f"+{screen_x}+{screen_y}")
+            return
+
+        crop_jpeg = self.feature_gallery.first_feature_crop_jpeg(vehicle_id)
+        if crop_jpeg is None:
+            self.hide_identity_preview()
+            return
+
+        try:
+            image = Image.open(BytesIO(crop_jpeg)).convert("RGB")
+        except Exception:
+            self.hide_identity_preview()
+            return
+
+        image.thumbnail((220, 150))
+        photo = ImageTk.PhotoImage(image)
+        if self.identity_preview_window is None:
+            self.identity_preview_window = tk.Toplevel(self.root)
+            self.identity_preview_window.overrideredirect(True)
+            self.identity_preview_window.attributes("-topmost", True)
+            self.identity_preview_label = ttk.Label(self.identity_preview_window, padding=4)
+            self.identity_preview_label.pack()
+
+        assert self.identity_preview_label is not None
+        self.identity_preview_photo = photo
+        self.identity_preview_vehicle_id = vehicle_id
+        self.identity_preview_label.configure(image=photo)
+        self.identity_preview_window.geometry(f"+{screen_x}+{screen_y}")
+        self.identity_preview_window.deiconify()
+
+    def hide_identity_preview(self, _event=None) -> None:
+        self.identity_preview_vehicle_id = None
+        if self.identity_preview_window is not None:
+            self.identity_preview_window.withdraw()
+
     def track_selected_identity_from_db(self, _event=None) -> str:
         if self.refreshing_identity_panel:
             return "break"
@@ -923,6 +1001,7 @@ class AutoCamTrackerApp:
             vehicle_id,
             self.store.current_detections,
             self.last_raw_frame,
+            min_score=self.identity_manager.auto_reid_min_score,
         )
         self.refresh_identity_db_panel()
         if identity is None:
@@ -1093,6 +1172,9 @@ class AutoCamTrackerApp:
 
     def on_close(self) -> None:
         self.running = False
+        if self.identity_preview_window is not None:
+            self.identity_preview_window.destroy()
+            self.identity_preview_window = None
         if self.detector is not None:
             self._close_detector()
             self.detector = None
