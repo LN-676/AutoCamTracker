@@ -26,6 +26,7 @@ def main() -> int:
     results.append(run_check("identity_store", check_identity_store))
     results.append(run_check("identity_manager", check_identity_manager))
     results.append(run_check("feature_gallery", check_feature_gallery))
+    results.append(run_check("auto_feature_sampler", check_auto_feature_sampler))
     results.append(run_check("model_load", check_model_load))
     results.append(run_check("video_input_pipeline", check_video_input_pipeline))
     results.append(run_check("webcam_probe", check_webcam_probe, warning_ok=True))
@@ -206,6 +207,61 @@ def check_identity_manager() -> str:
     if identity is None or identity.last_track_id is not None or manager.status != "searching":
         raise RuntimeError("GID selection used local track fallback without master feature")
     return f"transient_gid={transient.global_vehicle_id}; masterless_score={score:.2f}"
+
+
+def check_auto_feature_sampler() -> str:
+    import cv2
+    import numpy as np
+
+    sys.path.insert(0, str(PROJECT_ROOT / "code" / "V1"))
+    from auto_feature_sampler import AutoFeatureSampler
+    from detection_store import DetectionStore
+    from feature_gallery import FeatureGallery
+    from vehicle_identity_store import VehicleIdentityStore
+    from video_detector import TrackedDetection
+
+    frame = np.zeros((220, 320, 3), dtype=np.uint8)
+    rng = np.random.default_rng(11)
+    frame[50:160, 80:220] = rng.integers(45, 230, size=(110, 140, 3), dtype=np.uint8)
+    cv2.rectangle(frame, (80, 50), (220, 160), (255, 255, 255), 2)
+    detection = TrackedDetection(
+        track_id=41,
+        bbox=(80.0, 50.0, 220.0, 160.0),
+        class_id=2,
+        class_name="car",
+        confidence=0.92,
+        center=(150.0, 105.0),
+        frame_index=10,
+        timestamp=3.0,
+        tracker_name="botsort",
+    )
+
+    class DummyExtractor:
+        def extract(self, _frame, bbox):
+            x1, y1, x2, y2 = bbox
+            vector = np.array([x1 + x2, y1 + y2, x2 - x1, y2 - y1], dtype=np.float32)
+            vector /= max(1e-6, float(np.linalg.norm(vector)))
+            return vector.tolist()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        db_path = Path(temp_dir) / "identity.sqlite3"
+        store = VehicleIdentityStore(db_path)
+        vehicle_id = store.create_vehicle(detection)
+        gallery = FeatureGallery(db_path)
+        gallery.embedding_extractor = DummyExtractor()
+        detection_store = DetectionStore()
+        detection_store.update([detection], frame.shape)
+        sampler = AutoFeatureSampler(gallery)
+        result = sampler.start(vehicle_id, detection, frame, detection_store)
+        counts = gallery.summary_by_vehicle()
+        gallery.close()
+        store.close()
+
+    if not result.accepted or result.feature_id is None:
+        raise RuntimeError(f"auto feature sampler failed: {result.reason}")
+    if counts[vehicle_id].get("master", 0) != 1:
+        raise RuntimeError("auto feature sampler did not write a master feature")
+    return f"vehicle_id={vehicle_id}; feature={result.feature_id}; quality={result.quality_score:.2f}"
 
 
 def check_video_input_pipeline() -> str:

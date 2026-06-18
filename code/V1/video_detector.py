@@ -58,6 +58,7 @@ class InputConfig:
     confidence_threshold: float = 0.20
     iou_threshold: float = 0.65
     vehicle_classes_only: bool = True
+    tracker_buffer_seconds: float = 5.0
 
 
 @dataclass
@@ -86,6 +87,7 @@ class VideoDetector:
         self.source_frame_count: int | None = None
         self.frame_index = 0
         self._cv2 = None
+        self._tracker_config_path: Path | None = None
 
     def load_model(self) -> None:
         cache_root = CACHE_ROOT
@@ -105,6 +107,7 @@ class VideoDetector:
             self.tracker_adapter = DeepOcSortAdapter(
                 model_dir=MODEL_DIR,
                 det_thresh=self.config.confidence_threshold,
+                max_age=self._tracker_buffer_frames(),
                 iou_threshold=0.3,
             )
         else:
@@ -122,6 +125,7 @@ class VideoDetector:
                 self.capture = self._open_camera_capture(cv2, backend)
                 if self.capture is None:
                     raise RuntimeError(self._camera_error_message(self.config.camera_index))
+                self._configure_tracker_buffer()
                 return
             elif self.config.source_type == "video_file":
                 if not self.config.video_path:
@@ -140,6 +144,7 @@ class VideoDetector:
             self._configure_capture(cv2, self.capture)
             self.source_fps = self._read_capture_fps(cv2)
             self.source_frame_count = self._read_capture_frame_count(cv2)
+            self._configure_tracker_buffer()
 
         elif self.config.source_type == "screen_region":
             if self.config.screen_region is None:
@@ -149,6 +154,7 @@ class VideoDetector:
             self.screen_capture = mss.mss()
             self.source_fps = None
             self.source_frame_count = None
+            self._configure_tracker_buffer()
 
         else:
             raise ValueError(f"Unsupported source_type: {self.config.source_type}")
@@ -193,7 +199,7 @@ class VideoDetector:
             )
             return self._track_with_deepocsort(results)
 
-        tracker_config = TRACKER_CONFIGS[self.config.tracker_name]
+        tracker_config = str(self._tracker_config_path or TRACKER_CONFIGS[self.config.tracker_name])
         results = self.model.track(
             frame,
             persist=True,
@@ -287,6 +293,48 @@ class VideoDetector:
             reset = getattr(tracker, "reset", None)
             if callable(reset):
                 reset()
+
+    def _configure_tracker_buffer(self) -> None:
+        buffer_frames = self._tracker_buffer_frames()
+        if self.tracker_adapter is not None:
+            self.tracker_adapter.max_age = buffer_frames
+            self.tracker_adapter.reset()
+
+        if self.config.tracker_name == "botsort":
+            self._tracker_config_path = self._write_botsort_config(buffer_frames)
+        else:
+            self._tracker_config_path = None
+
+    def _tracker_buffer_frames(self) -> int:
+        fps = self.source_fps if self.source_fps and self.source_fps > 1.0 else 30.0
+        return max(1, int(round(float(self.config.tracker_buffer_seconds) * fps)))
+
+    @staticmethod
+    def _write_botsort_config(track_buffer: int) -> Path:
+        config_dir = CACHE_ROOT / "trackers"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        path = config_dir / f"botsort_buffer_{track_buffer}.yaml"
+        path.write_text(
+            "\n".join(
+                [
+                    "tracker_type: botsort",
+                    "track_high_thresh: 0.25",
+                    "track_low_thresh: 0.1",
+                    "new_track_thresh: 0.25",
+                    f"track_buffer: {track_buffer}",
+                    "match_thresh: 0.8",
+                    "fuse_score: True",
+                    "gmc_method: sparseOptFlow",
+                    "proximity_thresh: 0.5",
+                    "appearance_thresh: 0.8",
+                    "with_reid: False",
+                    "model: auto",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return path
 
     def skip_video_frames(self, frame_count: int) -> int:
         if self.config.source_type not in {"video_file", "video_url"} or self.capture is None:

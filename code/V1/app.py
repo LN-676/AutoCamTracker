@@ -28,6 +28,7 @@ except ImportError:  # pragma: no cover
     ImageTk = None
 
 try:
+    from auto_feature_sampler import AutoFeatureSampler
     from video_detector import InputConfig, VideoDetector
     from detection_store import DetectionStore
     from feature_gallery import FeatureGallery
@@ -38,6 +39,7 @@ try:
     from scene_cut import SceneCutDetector
     from vehicle_identity_store import VehicleIdentityStore
 except ImportError:  # pragma: no cover
+    from .auto_feature_sampler import AutoFeatureSampler
     from .video_detector import InputConfig, VideoDetector
     from .detection_store import DetectionStore
     from .feature_gallery import FeatureGallery
@@ -83,6 +85,7 @@ class AutoCamTrackerApp:
             identity_store=self.identity_store,
             feature_gallery=self.feature_gallery,
         )
+        self.auto_feature_sampler = AutoFeatureSampler(self.feature_gallery)
         self.scene_cut_detector = SceneCutDetector()
         self.reframer = Reframer(
             FramingConfig(
@@ -122,6 +125,7 @@ class AutoCamTrackerApp:
         self.identity_preview_label: ttk.Label | None = None
         self.identity_preview_photo = None
         self.identity_preview_vehicle_id: int | None = None
+        self.auto_feature_status_message = ""
 
         self.before_image_ref = None
         self.after_image_ref = None
@@ -157,6 +161,7 @@ class AutoCamTrackerApp:
         self.model_var = tk.StringVar(value=self.config.default_model)
         self.reid_model_var = tk.StringVar(value=self.config.default_reid_model)
         self.auto_reid_threshold_var = tk.StringVar(value=f"{self.identity_manager.auto_reid_min_score:.2f}")
+        self.auto_feature_threshold_var = tk.StringVar(value=f"{self.auto_feature_sampler.config.min_quality_score:.2f}")
         self.playback_speed_var = tk.StringVar(value="1x")
         self.camera_index_var = tk.StringVar(value="0")
         self.video_path_var = tk.StringVar(value="No video selected")
@@ -245,7 +250,7 @@ class AutoCamTrackerApp:
         ttk.Label(identity_controls, textvariable=self.identity_summary_var).grid(row=0, column=0, columnspan=4, sticky="w", padx=3)
         ttk.Button(identity_controls, text="Refresh", width=9, command=self.refresh_identity_db_panel).grid(row=0, column=4, sticky="ew", padx=2)
         ttk.Button(identity_controls, text="Delete ID", width=9, command=self.delete_selected_identity).grid(row=0, column=5, sticky="ew", padx=2)
-        ttk.Button(identity_controls, text="Add Feature", width=11, command=self.add_feature_to_selected_identity).grid(row=1, column=0, columnspan=2, sticky="ew", padx=2, pady=(4, 0))
+        ttk.Button(identity_controls, text="Auto Add Feature", width=16, command=self.start_auto_add_feature).grid(row=1, column=0, columnspan=2, sticky="ew", padx=2, pady=(4, 0))
         ttk.Button(identity_controls, text="Link BBox", width=10, command=self.start_link_bbox).grid(row=1, column=2, columnspan=2, sticky="ew", padx=2, pady=(4, 0))
         ttk.Button(identity_controls, text="Find GID", width=9, command=self.track_selected_identity_from_db).grid(row=1, column=4, columnspan=2, sticky="ew", padx=2, pady=(4, 0))
         ttk.Label(identity_controls, text="Auto ReID Th").grid(row=2, column=0, columnspan=2, sticky="w", padx=3, pady=(5, 0))
@@ -254,6 +259,12 @@ class AutoCamTrackerApp:
         threshold_entry.bind("<Return>", self.apply_auto_reid_threshold)
         threshold_entry.bind("<FocusOut>", self.apply_auto_reid_threshold)
         ttk.Label(identity_controls, text="0.00-1.00").grid(row=2, column=3, columnspan=3, sticky="w", padx=3, pady=(5, 0))
+        ttk.Label(identity_controls, text="Auto Feat Th").grid(row=3, column=0, columnspan=2, sticky="w", padx=3, pady=(5, 0))
+        feature_threshold_entry = ttk.Entry(identity_controls, textvariable=self.auto_feature_threshold_var, width=7)
+        feature_threshold_entry.grid(row=3, column=2, sticky="ew", padx=2, pady=(5, 0))
+        feature_threshold_entry.bind("<Return>", self.apply_auto_feature_threshold)
+        feature_threshold_entry.bind("<FocusOut>", self.apply_auto_feature_threshold)
+        ttk.Label(identity_controls, text="quality").grid(row=3, column=3, columnspan=3, sticky="w", padx=3, pady=(5, 0))
         self.identity_tree = ttk.Treeview(
             identity_controls,
             columns=("gid", "type", "lid", "master", "pending", "candidate", "frame", "conf"),
@@ -283,8 +294,8 @@ class AutoCamTrackerApp:
         self.identity_tree.bind("<BackSpace>", self.delete_selected_identity)
         self.identity_tree.bind("<Motion>", self.on_identity_tree_motion)
         self.identity_tree.bind("<Leave>", self.hide_identity_preview)
-        self.identity_tree.grid(row=3, column=0, columnspan=6, sticky="nw", padx=3, pady=(6, 0))
-        ttk.Label(identity_controls, text="ReID Model").grid(row=4, column=0, sticky="w", padx=3, pady=(6, 0))
+        self.identity_tree.grid(row=4, column=0, columnspan=6, sticky="nw", padx=3, pady=(6, 0))
+        ttk.Label(identity_controls, text="ReID Model").grid(row=5, column=0, sticky="w", padx=3, pady=(6, 0))
         self.reid_model_box = ttk.Combobox(
             identity_controls,
             textvariable=self.reid_model_var,
@@ -292,10 +303,10 @@ class AutoCamTrackerApp:
             width=18,
             state="readonly",
         )
-        self.reid_model_box.grid(row=4, column=1, columnspan=3, sticky="ew", padx=3, pady=(6, 0))
+        self.reid_model_box.grid(row=5, column=1, columnspan=3, sticky="ew", padx=3, pady=(6, 0))
         self.reid_model_box.bind("<<ComboboxSelected>>", lambda _: self.apply_reid_model_config())
         ttk.Button(identity_controls, text="Refresh Models", width=15, command=self.refresh_reid_model_options).grid(
-            row=4,
+            row=5,
             column=4,
             columnspan=2,
             sticky="ew",
@@ -304,7 +315,7 @@ class AutoCamTrackerApp:
         )
         for column in range(6):
             identity_controls.columnconfigure(column, weight=0)
-        identity_controls.rowconfigure(3, weight=0)
+        identity_controls.rowconfigure(4, weight=0)
 
         main.columnconfigure(0, weight=1)
         main.columnconfigure(1, weight=1)
@@ -370,6 +381,19 @@ class AutoCamTrackerApp:
         self.identity_manager.set_auto_reid_threshold(threshold)
         self.auto_reid_threshold_var.set(f"{threshold:.2f}")
         self.status_var.set(f"Status: Auto ReID threshold set to {threshold:.2f}")
+        return "break"
+
+    def apply_auto_feature_threshold(self, _event=None) -> str:
+        raw_value = self.auto_feature_threshold_var.get().strip()
+        try:
+            threshold = float(raw_value)
+        except ValueError:
+            threshold = self.auto_feature_sampler.config.min_quality_score
+
+        threshold = max(0.0, min(1.0, threshold))
+        self.auto_feature_sampler.set_quality_threshold(threshold)
+        self.auto_feature_threshold_var.set(f"{threshold:.2f}")
+        self.status_var.set(f"Status: Auto feature quality threshold set to {threshold:.2f}")
         return "break"
 
     def _ui_input_config(self) -> InputConfig:
@@ -444,6 +468,8 @@ class AutoCamTrackerApp:
 
     def clear_selection(self) -> None:
         self.identity_manager.reset()
+        self.auto_feature_sampler.stop()
+        self.auto_feature_status_message = ""
         self.refresh_identity_db_panel()
 
     def choose_video_file(self) -> None:
@@ -666,6 +692,8 @@ class AutoCamTrackerApp:
                 self.status_var.set(f"Status: vehicle id {vehicle_id} was not found for bbox link")
                 return
             label = self.identity_store.display_label(vehicle_id)
+            self._activate_auto_feature_capture(vehicle_id, detection, self.last_raw_frame)
+            self.refresh_identity_db_panel()
             self.status_var.set(
                 f"Status: linked bbox local track {candidate.track_id} to GID {label}"
             )
@@ -673,6 +701,9 @@ class AutoCamTrackerApp:
 
         identity = self.identity_manager.select_detection(detection, self.last_raw_frame)
         self.refresh_identity_db_panel()
+        if identity.global_vehicle_id is not None:
+            self._activate_auto_feature_capture(identity.global_vehicle_id, detection, self.last_raw_frame)
+            self.refresh_identity_db_panel()
         self.status_var.set(
             f"Status: selected global id {identity.global_vehicle_id} "
             f"(local track {candidate.track_id})"
@@ -706,6 +737,11 @@ class AutoCamTrackerApp:
         frame_data.source_fps = self.detector.get_source_fps()
         frame_data.skipped_frames = self.skipped_frames
 
+        auto_feature_note = (
+            f" | AutoFeat: {self.auto_feature_status_message}"
+            if self.auto_feature_status_message
+            else ""
+        )
         self.status_var.set(
             "Status: "
             f"{frame_data.tracking_status} | Display FPS: {self.fps:.1f} | "
@@ -717,6 +753,7 @@ class AutoCamTrackerApp:
             f"Lost: {frame_data.lost_frames} | ReID: {frame_data.reacquire_score:.2f} | "
             f"Cut: {'yes' if frame_data.camera_cut_detected else 'no'} | "
             f"Crop: {frame_data.framing_status.crop_window}"
+            f"{auto_feature_note}"
         )
 
         self._drop_late_video_frames()
@@ -738,6 +775,7 @@ class AutoCamTrackerApp:
         )
         self._update_images(frame_data.before_frame, frame_data.after_frame)
         self.current_frame_data = frame_data
+        self._run_auto_feature_sampling(frame)
         self.refresh_identity_db_panel()
         return frame_data
 
@@ -828,6 +866,8 @@ class AutoCamTrackerApp:
         self.current_frame_data = None
         self.skipped_frames = 0
         self.link_bbox_vehicle_id = None
+        self.auto_feature_sampler.stop()
+        self.auto_feature_status_message = ""
 
     def _clear_screen_region_selection(self) -> None:
         self.input_config.screen_region = None
@@ -1035,6 +1075,55 @@ class AutoCamTrackerApp:
         label = self.identity_store.display_label(self.link_bbox_vehicle_id)
         self.status_var.set(f"Status: click a visible bbox to link it to GID {label}")
         return "break"
+
+    def start_auto_add_feature(self) -> str:
+        vehicle_ids = self._selected_identity_vehicle_ids()
+        vehicle_id = vehicle_ids[0] if vehicle_ids else self.identity_manager.selected_global_vehicle_id
+        if vehicle_id is None:
+            self.status_var.set("Status: select a GID before Auto Add Feature")
+            return "break"
+        if self.last_raw_frame is None:
+            self.status_var.set("Status: no current frame available for Auto Add Feature")
+            return "break"
+
+        detection = self._detection_for_vehicle_id(vehicle_id)
+        if detection is None:
+            self.status_var.set("Status: Link BBox to a visible vehicle before Auto Add Feature")
+            return "break"
+
+        result = self._activate_auto_feature_capture(vehicle_id, detection, self.last_raw_frame)
+        self.refresh_identity_db_panel()
+        label = self.identity_store.display_label(vehicle_id)
+        if result.accepted:
+            self.status_var.set(
+                f"Status: auto feature capture active for GID {label}; "
+                f"added master feature {result.feature_id} (quality {result.quality_score:.2f})"
+            )
+        else:
+            self.status_var.set(
+                f"Status: auto feature capture active for GID {label}; first sample rejected: {result.reason}"
+            )
+        return "break"
+
+    def _activate_auto_feature_capture(self, vehicle_id: int, detection, frame):
+        result = self.auto_feature_sampler.start(vehicle_id, detection, frame, self.store)
+        label = self.identity_store.display_label(vehicle_id)
+        if result.accepted:
+            self.auto_feature_status_message = f"GID {label} added {result.feature_id}"
+        else:
+            self.auto_feature_status_message = f"GID {label} active; waiting for clean crop"
+        return result
+
+    def _run_auto_feature_sampling(self, frame) -> None:
+        vehicle_id = self.auto_feature_sampler.active_vehicle_id
+        if vehicle_id is None:
+            return
+        detection = self._detection_for_vehicle_id(vehicle_id)
+        result = self.auto_feature_sampler.update(detection, frame, self.store)
+        if not result.accepted:
+            return
+        label = self.identity_store.display_label(vehicle_id)
+        self.auto_feature_status_message = f"GID {label} added {result.feature_id} q{result.quality_score:.2f}"
 
     def add_feature_to_selected_identity(self) -> str:
         vehicle_ids = self._selected_identity_vehicle_ids()
