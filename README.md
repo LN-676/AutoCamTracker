@@ -1,129 +1,119 @@
-# AutoCamTracker V1.3
+# AutoCamTracker V1.4
 
-AutoCamTracker 是一個以影片、螢幕區域或 webcam 作為輸入的車輛偵測與追蹤工具。V1.3 將 ReID 改為手動控管的 Master Feature Gallery：YOLO 只做偵測，tracker 預設使用普通 BoT-SORT，Identity DB 只保存 GID、最後 bbox 與基本 metadata。
+AutoCamTracker 是一個以影片、螢幕區域或 webcam 作為輸入的車輛偵測、單車追蹤、數位構圖與 GID 重新辨識工具。V1.4 加入自動 Master feature 採樣、GID 自動找回、防止錯車寫入 Master 的保護機制，以及更精簡的 Identity 操作流程。
 
 ## 功能簡述
 
-- 支援 webcam、影片檔、螢幕區域三種輸入來源。
-- 支援 YOLO 模型偵測車輛，並顯示 bbox、track id、confidence。
-- 預設 detection / tracking 模型為 `yolo26s.pt`。
-- 預設 Identity ReID 模型為 `yolo26s-reid.onnx`。
-- 可在 Before 畫面直接點選 bbox，或使用 Auto Track 選擇追蹤車輛。
-- Identity DB 會記錄車輛全域 ID、最後 bbox、最後 local track 與基本 metadata。
-- Feature Gallery 提供 Master / Pending / Candidate 結構；正式 ReID 身份來源只使用 Master。
-- `Add Feature` 會手動把目前可見 bbox 的 ReID snapshot 加入 Master，每台車最多 500 張。
-- `Find GID` 會手動使用 Master Gallery Top-K matching 找回目前畫面中的同一台車。
-- `Link BBox` 可在 feature 不足時，先選 GID 再手動把目前 bbox 綁到同一台車。
-- 支援雙擊 GID 欄位自訂車輛 ID 顯示名稱。
-- After 畫面會依追蹤目標做數位變焦與置中構圖。
-- 支援影片播放速度調整與時間軸拖曳。
-- Before / After 畫面會跟隨視窗等比縮放。
+- 支援 `webcam`、`video_file`、`video_url`、`screen_region` 四種輸入來源。
+- 預設 detection / tracking 模型為 `code/model/yolo26s.pt`。
+- 預設 Identity ReID 模型為 `code/model/yolo26s-reid.onnx`。
+- Tracking buffer 依來源 FPS 設定為約 5 秒，降低短暫遮擋或漏檢造成的掉 ID。
+- Before 畫面顯示 bbox、local track id、GID、class 與 confidence。
+- After 畫面依選定車輛做數位變焦與置中構圖。
+- `GID` 是長期車輛身份，`LID` 是 YOLO / tracker 的短期 local track id。
+- 點選 bbox 會建立/選取 GID，並啟動自動 Master feature 採樣。
+- 選取 Identity DB 的 GID row 後，下一次點 bbox 會直接 Link BBox 到該 GID，不再需要額外按 Link BBox。
+- `Find GID` 會用該 GID 的 Master features 對目前畫面 detections 做 ReID matching。
+- `Auto ReID Th` 可調整 Find GID / 自動 GID reacquire 的 ReID 相似度門檻。
+- `Auto Add Feature` 可啟動目前 GID 的持續自動 Master feature 採樣。
+- `Auto Feature Mode` 支援 `Balanced`、`Diverse`、`Strict`：
+  - `Balanced`：一般使用，品質與多樣性平衡。
+  - `Diverse`：更積極收集遠車、近車、不同位置/角度 proxy、太陽/陰影光影差異。
+  - `Strict`：高品質、少量、保守寫入。
+- 自動寫入 Master 前會做防污染檢查：
+  - 如果 GID 已有 Master feature，新增 feature 必須通過 dominant class 檢查。
+  - 新增 feature 必須與該 GID Master features 達到 ReID 分數門檻。
+  - 避免 tracker ID switch 後把錯車寫入同一個 GID。
+- Identity row hover 會顯示該 GID 的第一張 feature crop 預覽。
+- 雙擊 GID 欄位可自訂顯示名稱。
 
-## 區塊分工
+## 專案結構
 
-- `code/V1/app.py`：Tkinter UI、控制列、Before / After 顯示、時間軸、使用者互動。
-- `code/V1/video_detector.py`：影片/webcam/螢幕來源讀取、YOLO 模型載入、偵測與追蹤器串接。
-- `code/V1/detection_store.py`：保存目前偵測結果、track 歷史與候選車輛排序。
-- `code/V1/target_tracker.py`：單一目標選取、lost 狀態與追蹤狀態管理。
-- `code/V1/reframer.py`：依目標 bbox 建立 crop window，輸出追蹤構圖畫面。
-- `code/V1/tracker_adapter.py`：外部追蹤器 adapter。
-- `code/V1/vehicle_identity_store.py`：SQLite Identity DB，只保存 GID、last bbox 與 metadata。
-- `code/V1/feature_gallery.py`：Master / Pending / Candidate feature gallery、crop quality filter、duplicate rejection、Top-K matching，以及 FAISS / Qdrant / Milvus 預留介面。
-- `code/V1/reid_embedding.py`：Ultralytics ReID encoder 包裝，用於抽取車輛 appearance embedding。
-- `code/model/`：YOLO 模型與外部 tracker 程式資料。
-- `management/AutoCamTracker_Development/`：開發規格、技術報告與版本變更紀錄。
+- `run_v1_app.py`：從專案根目錄啟動 V1 app。
+- `code/V1/app.py`：Tkinter UI、控制列、Before / After 顯示、時間軸與互動。
+- `code/V1/video_detector.py`：來源讀取、YOLO 模型載入、偵測與 tracker 串接。
+- `code/V1/detection_store.py`：保存目前 detections、track history、候選排序。
+- `code/V1/identity_manager.py`：GID / LID 狀態管理、Find GID、自動 reacquire。
+- `code/V1/auto_feature_sampler.py`：自動 Master feature 採樣與防污染 gating。
+- `code/V1/feature_gallery.py`：Master / Pending / Candidate gallery、ReID matching、crop quality filter。
+- `code/V1/reid_embedding.py`：Ultralytics ReID encoder 包裝。
+- `code/V1/reframer.py`：依目標 bbox 產生數位構圖輸出。
+- `code/model/`：預設 YOLO / ReID 模型與 tracker 相關資源。
+- `outputs/`：本機執行產生的資料庫、測試影片與暫存輸出。此資料夾不應上傳到 GitHub。
 
-## 使用方式
+## 安裝與執行
 
-建議從專案根目錄執行：
+建議使用 Python 3.13 或目前專案相容的 Python 版本。
+
+```bash
+python -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python run_v1_app.py
+```
+
+如果你已經有 `.venv`，可直接執行：
 
 ```bash
 .venv/bin/python run_v1_app.py
 ```
 
-基本流程：
+macOS webcam 若無法開啟，請到 System Settings > Privacy & Security > Camera，允許 Terminal、Visual Studio Code 或啟動 Python 的 app 使用相機，重新開啟終端機後再執行。
 
-1. 在 Source 區選擇 `webcam`、`video_file` 或 `screen_region`。
-2. 若使用影片，按 `Browse Video` 選擇檔案。
-3. 在 Tracking 區選擇模型、tracker 與 framing 模式。
-4. 按 `Start` 開始偵測。
-5. 在 Before 畫面點選車輛 bbox，或按 `Auto Track`。
-6. 若要建立正式 ReID feature，先選 GID，確認該車 bbox 仍可見，按 `Add Feature` 加入 Master。
-7. 若 feature 不足或跨攝影機需要補綁定，先選 GID，按 `Link BBox`，再點 Before 畫面的 bbox。
-8. 若要用 GID 找回車輛，選 GID 後按 `Find GID`。
-9. 在 After 畫面確認追蹤構圖結果。
+## 基本使用流程
 
-## V1.3 注意事項
+1. 在 `Source` 區選擇輸入來源。
+2. 如果使用影片，按 `Browse Video` 選檔；如果使用網址，填入 URL。
+3. 在 `Tracking` 區選擇模型、tracker 與 framing 模式。
+4. `Playback` 區位於 `Tracking` 下方，可控制 Start / Pause / Stop / Record 與速度。
+5. 按 `Start` 開始偵測。
+6. 在 Before 畫面點選車輛 bbox 建立/選取 GID。
+7. 需要補綁既有 GID 時，先點 Identity DB 的 GID row，再點 Before 畫面中的 bbox。
+8. 需要用 GID 找回車輛時，選 GID row 後按 `Find GID`。
+9. 需要持續收集特徵時，選 GID row 後按 `Auto Add Feature`，或直接點 bbox 啟動自動採樣。
+10. 使用 `Auto Feature Mode` 決定自動採樣保守程度。
 
-- V1.3 仍以單一車輛追蹤與互動式重新辨識為主。
-- `LID` 是 YOLO / tracker 的短期本地 ID；`GID` 是 AutoCamTracker 的長期車輛身份。
-- ReID 模型只會在 `Add Feature` 或手動 `Find GID` 時執行。
-- 點 bbox、每幀追蹤、UI refresh 都不會自動寫 feature，避免髒資料進入 Master Gallery。
-- Master feature 會經過 crop quality filter 與 duplicate rejection。
-- 預設 feature backend 是 SQLite；FAISS / Qdrant / Milvus 目前保留介面，尚未啟用。
+## V1.4 注意事項
+
+- V1.4 仍以單一車輛追蹤與互動式 GID 管理為主。
+- `Auto Add Feature` 會寫入 Master gallery；如果 Master 已存在，新增 feature 會先通過 class 與 ReID 防污染檢查。
+- 如果 YOLO / tracker 產生 `LID=None`，目前部分 Find GID / tracking 流程仍可能看不到該 bbox，這是後續版本要改善的方向。
+- 若 GID 已被舊版本寫入錯車 feature，V1.4 會防止繼續污染，但不會自動清理既有髒資料。
+- Identity DB 是本機資料，預設位於 `outputs/vehicle_identity.sqlite3`，不應作為 release 檔案上傳。
+- `outputs/`、`.venv/`、cache、測試輸出都不屬於乾淨 release 內容。
 
 ---
 
-# AutoCamTracker V1.3 English
+# AutoCamTracker V1.4 English
 
-AutoCamTracker is a vehicle detection and tracking desktop tool that can use a video file, a selected screen region, or a webcam as the input source. V1.3 moves ReID into a manually curated Master Feature Gallery: YOLO only detects, the tracker defaults to plain BoT-SORT, and the Identity DB stores only GID, last bbox, and basic metadata.
+AutoCamTracker is a vehicle detection, single-target tracking, digital reframing, and GID re-identification desktop tool. V1.4 adds automatic Master feature capture, GID reacquire controls, identity-write guards, and a simplified Identity DB workflow.
 
-## Feature Overview
+## Highlights
 
-- Supports three input sources: webcam, video file, and screen region.
-- Uses YOLO models to detect vehicles and display bbox, track id, and confidence.
-- Defaults to `yolo26s.pt` for detection / tracking.
-- Defaults to `yolo26s-reid.onnx` for Identity ReID.
-- Allows target selection by clicking a bbox in the Before view or by using Auto Track.
-- Records global vehicle IDs, last bbox, last local track, and basic metadata in the Identity DB.
-- Adds a Master / Pending / Candidate Feature Gallery; only Master is the official ReID identity source.
-- `Add Feature` manually adds the current visible bbox snapshot to Master, capped at 500 features per vehicle.
-- `Find GID` manually uses Master Gallery Top-K matching to recover the selected vehicle in the current frame.
-- `Link BBox` lets the user manually bind a visible bbox to an existing GID when feature coverage is not enough.
-- Allows editing the displayed GID label by double-clicking the GID column.
-- The After view digitally zooms and centers the frame based on the selected target.
-- Supports video playback speed control and timeline seeking.
-- The Before / After views scale proportionally with the application window.
+- Supports `webcam`, `video_file`, `video_url`, and `screen_region` inputs.
+- Defaults to `code/model/yolo26s.pt` for detection / tracking.
+- Defaults to `code/model/yolo26s-reid.onnx` for Identity ReID.
+- Keeps tracker lost-buffer at about 5 seconds based on source FPS.
+- `GID` is the long-lived vehicle identity; `LID` is the short-lived tracker id.
+- Clicking a bbox selects/creates a GID and starts automatic Master feature capture.
+- Selecting a GID row makes the next bbox click link that bbox to the selected GID.
+- `Find GID` matches current detections against the selected GID's Master gallery.
+- `Auto ReID Th` controls Find GID and automatic reacquire similarity threshold.
+- `Auto Feature Mode` supports `Balanced`, `Diverse`, and `Strict`.
+- Automatic Master writes are guarded by dominant class and ReID checks once a GID already has Master features.
+- Hovering an Identity DB row previews that GID's first feature crop.
 
-## Project Structure
+## Run
 
-- `code/V1/app.py`: Tkinter UI, control bar, Before / After display, timeline, and user interaction.
-- `code/V1/video_detector.py`: Video, webcam, and screen input handling, YOLO model loading, detection, and tracker integration.
-- `code/V1/detection_store.py`: Stores current detections, track history, and candidate vehicle ranking.
-- `code/V1/target_tracker.py`: Single target selection, lost state handling, and tracking state management.
-- `code/V1/reframer.py`: Builds the crop window from the target bbox and produces the tracking output frame.
-- `code/V1/tracker_adapter.py`: Adapter for external trackers.
-- `code/V1/vehicle_identity_store.py`: SQLite Identity DB for GID, last bbox, and metadata only.
-- `code/V1/feature_gallery.py`: Master / Pending / Candidate feature gallery, crop quality filter, duplicate rejection, Top-K matching, and reserved FAISS / Qdrant / Milvus interfaces.
-- `code/V1/reid_embedding.py`: Wrapper around the Ultralytics ReID encoder.
-- `code/model/`: YOLO model and external tracker resources.
-- `management/AutoCamTracker_Development/`: Development specs, technical reports, and version change logs.
+```bash
+python -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python run_v1_app.py
+```
 
-## How To Run
-
-Run from the project root:
+If dependencies are already installed:
 
 ```bash
 .venv/bin/python run_v1_app.py
 ```
 
-Basic workflow:
-
-1. Select `webcam`, `video_file`, or `screen_region` in the Source section.
-2. If using a video file, click `Browse Video` and choose a file.
-3. Select the model, tracker, and framing mode in the Tracking section.
-4. Click `Start` to begin detection.
-5. Click a vehicle bbox in the Before view, or click `Auto Track`.
-6. To create an official ReID feature, select a GID, make sure its bbox is visible, and click `Add Feature`.
-7. When feature coverage is not enough, select a GID, click `Link BBox`, then click the bbox in the Before view.
-8. To recover a vehicle by GID, select the GID and click `Find GID`.
-9. Check the reframed tracking result in the After view.
-
-## V1.3 Notes
-
-- V1.3 still focuses on single-vehicle tracking and interactive re-identification.
-- `LID` is the short-term tracker ID; `GID` is AutoCamTracker's long-lived vehicle identity.
-- The ReID model runs only during `Add Feature` or manual `Find GID`.
-- Clicking a bbox, per-frame tracking, and UI refresh never auto-write features.
-- Master features pass crop quality filtering and duplicate rejection.
-- SQLite is the default feature backend; FAISS / Qdrant / Milvus are reserved interfaces for future use.
+Runtime files such as `outputs/vehicle_identity.sqlite3` are local user data and are intentionally excluded from releases.
