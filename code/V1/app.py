@@ -251,8 +251,17 @@ class AutoCamTrackerApp:
         ttk.Label(identity_controls, textvariable=self.identity_summary_var).grid(row=0, column=0, columnspan=4, sticky="w", padx=3)
         ttk.Button(identity_controls, text="Refresh", width=9, command=self.refresh_identity_db_panel).grid(row=0, column=4, sticky="ew", padx=2)
         ttk.Button(identity_controls, text="Delete ID", width=9, command=self.delete_selected_identity).grid(row=0, column=5, sticky="ew", padx=2)
-        ttk.Button(identity_controls, text="Auto Add Feature", width=16, command=self.start_auto_add_feature).grid(row=1, column=0, columnspan=3, sticky="ew", padx=2, pady=(4, 0))
-        ttk.Button(identity_controls, text="Find GID", width=9, command=self.track_selected_identity_from_db).grid(row=1, column=3, columnspan=3, sticky="ew", padx=2, pady=(4, 0))
+        ttk.Button(identity_controls, text="Auto Add Feature", command=self.start_auto_add_feature).grid(
+            row=1, column=0, columnspan=2, sticky="ew", padx=2, pady=(4, 0)
+        )
+        ttk.Button(
+            identity_controls,
+            text="Manual Add",
+            command=self.add_feature_to_selected_identity,
+        ).grid(row=1, column=2, columnspan=2, sticky="ew", padx=2, pady=(4, 0))
+        ttk.Button(identity_controls, text="Find GID", command=self.track_selected_identity_from_db).grid(
+            row=1, column=4, columnspan=2, sticky="ew", padx=2, pady=(4, 0)
+        )
         ttk.Label(identity_controls, text="Auto ReID Th").grid(row=2, column=0, columnspan=2, sticky="w", padx=3, pady=(5, 0))
         threshold_entry = ttk.Entry(identity_controls, textvariable=self.auto_reid_threshold_var, width=7)
         threshold_entry.grid(row=2, column=2, sticky="ew", padx=2, pady=(5, 0))
@@ -795,6 +804,8 @@ class AutoCamTrackerApp:
             source_fps=self.detector.get_source_fps() if self.detector is not None else None,
             skipped_frames=self.skipped_frames,
         )
+        if frame_data.camera_cut_detected:
+            self._stop_auto_feature_capture_for_scene_change()
         self._update_images(frame_data.before_frame, frame_data.after_frame)
         self.current_frame_data = frame_data
         self._run_auto_feature_sampling(frame)
@@ -1168,6 +1179,15 @@ class AutoCamTrackerApp:
         self.auto_feature_status_message = f"GID {label} added {result.feature_id} q{result.quality_score:.2f}"
         self._set_identity_mode(f"Auto Add Feature added feature {result.feature_id} to GID {label}")
 
+    def _stop_auto_feature_capture_for_scene_change(self) -> None:
+        vehicle_id = self.auto_feature_sampler.active_vehicle_id
+        if vehicle_id is None:
+            return
+        label = self.identity_store.display_label(vehicle_id)
+        self.auto_feature_sampler.stop()
+        self.auto_feature_status_message = ""
+        self._set_identity_mode(f"camera changed; Auto Add Feature stopped for GID {label}")
+
     def add_feature_to_selected_identity(self) -> str:
         vehicle_ids = self._selected_identity_vehicle_ids()
         vehicle_id = vehicle_ids[0] if vehicle_ids else self.identity_manager.selected_global_vehicle_id
@@ -1391,23 +1411,38 @@ class AutoCamTrackerApp:
         for detection in detections:
             x1, y1, x2, y2 = [int(value) for value in detection.bbox]
             global_id = self.identity_manager.global_id_for_detection(detection)
-            if global_id:
-                gid_label = self.identity_store.display_label(global_id)
-                id_label = f"g:{gid_label} l:{detection.track_id}"
-            else:
-                id_label = f"id:{detection.track_id}"
-            label = f"{id_label} {detection.class_name} {detection.confidence:.2f}"
-            color = (0, 220, 255) if global_id else (80, 220, 80)
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3)
             font_face = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = cv2.getFontScaleFromHeight(font_face, 20, 2)
+            selected_gid = self.identity_manager.selected_global_vehicle_id
+            is_selected = global_id is not None and global_id == selected_gid
+            box_color = (0, 0, 255) if is_selected else (80, 220, 80)
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, 4 if is_selected else 3)
+
+            gid_height = 50
+            lid_height = 30
+            gid_scale = cv2.getFontScaleFromHeight(font_face, gid_height, 3)
+            lid_scale = cv2.getFontScaleFromHeight(font_face, lid_height, 2)
+            text_x = max(0, x1)
+            gid_y = max(gid_height + 4, y1 - lid_height - 14)
+            lid_y = max(gid_height + lid_height + 10, y1 - 6)
+
+            if global_id is not None:
+                cv2.putText(
+                    annotated,
+                    str(global_id),
+                    (text_x, gid_y),
+                    font_face,
+                    gid_scale,
+                    (0, 0, 255),
+                    3,
+                    cv2.LINE_AA,
+                )
             cv2.putText(
                 annotated,
-                label,
-                (x1, max(24, y1 - 10)),
+                f"LID {detection.track_id}",
+                (text_x, lid_y),
                 font_face,
-                font_scale,
-                color,
+                lid_scale,
+                box_color,
                 2,
                 cv2.LINE_AA,
             )

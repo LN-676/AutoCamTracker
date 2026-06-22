@@ -8,7 +8,7 @@ AutoCamTracker 是一個以影片、螢幕區域或 webcam 作為輸入的車輛
 - 預設 detection / tracking 模型為 `code/model/yolo26s.pt`。
 - 預設 Identity ReID 模型為 `code/model/yolo26s-reid.onnx`。
 - Tracking buffer 依來源 FPS 設定為約 5 秒，降低短暫遮擋或漏檢造成的掉 ID。
-- Before 畫面顯示 bbox、local track id、GID、class 與 confidence。
+- Before 畫面以 50 px 紅色數字顯示 GID，並以 30 px 文字顯示 LID；目前選取車輛的 bbox 會顯示紅框。
 - After 畫面依選定車輛做數位變焦與置中構圖。
 - `GID` 是長期車輛身份，`LID` 是 YOLO / tracker 的短期 local track id。
 - 點選 bbox 會建立/選取 GID，並啟動自動 Master feature 採樣。
@@ -16,6 +16,8 @@ AutoCamTracker 是一個以影片、螢幕區域或 webcam 作為輸入的車輛
 - `Find GID` 會用該 GID 的 Master features 對目前畫面 detections 做 ReID matching。
 - `Auto ReID Th` 可調整 Find GID / 自動 GID reacquire 的 ReID 相似度門檻。
 - `Auto Add Feature` 可啟動目前 GID 的持續自動 Master feature 採樣。
+- `Manual Add` 每次按下會嘗試加入目前 GID 的一張 Master feature，供人工驗證使用。
+- `Auto Add Feature` 僅在目前鏡頭場景內有效；偵測到切鏡後會自動停止，必須再次按下才能在新場景繼續採樣。
 - `Auto Feature Mode` 支援 `Balanced`、`Diverse`、`Strict`：
   - `Balanced`：一般使用，品質與多樣性平衡。
   - `Diverse`：更積極收集遠車、近車、不同位置/角度 proxy、太陽/陰影光影差異。
@@ -69,8 +71,9 @@ macOS webcam 若無法開啟，請到 System Settings > Privacy & Security > Cam
 6. 在 Before 畫面點選車輛 bbox 建立/選取 GID。
 7. 需要補綁既有 GID 時，先點 Identity DB 的 GID row，再點 Before 畫面中的 bbox。
 8. 需要用 GID 找回車輛時，選 GID row 後按 `Find GID`。
-9. 需要持續收集特徵時，選 GID row 後按 `Auto Add Feature`，或直接點 bbox 啟動自動採樣。
-10. 使用 `Auto Feature Mode` 決定自動採樣保守程度。
+9. 需要持續收集特徵時，選 GID row 後按 `Auto Add Feature`，或直接點 bbox 啟動自動採樣；切換鏡頭後需重新啟動。
+10. 需要人工驗證單張特徵時，按 `Manual Add`；照片仍需通過品質與重複檢查。
+11. 使用 `Auto Feature Mode` 決定自動採樣保守程度。
 
 ## V1.4 注意事項
 
@@ -94,11 +97,14 @@ AutoCamTracker is a vehicle detection, single-target tracking, digital reframing
 - Defaults to `code/model/yolo26s-reid.onnx` for Identity ReID.
 - Keeps tracker lost-buffer at about 5 seconds based on source FPS.
 - `GID` is the long-lived vehicle identity; `LID` is the short-lived tracker id.
+- The Before view renders the numeric GID in red at 50 px, the LID at 30 px, and the selected bbox in red.
 - Clicking a bbox selects/creates a GID and starts automatic Master feature capture.
 - Selecting a GID row makes the next bbox click link that bbox to the selected GID.
 - `Find GID` matches current detections against the selected GID's Master gallery.
 - `Auto ReID Th` controls Find GID and automatic reacquire similarity threshold.
 - `Auto Feature Mode` supports `Balanced`, `Diverse`, and `Strict`.
+- `Manual Add` attempts one Master feature per click for validation.
+- Automatic feature capture stops at a detected camera cut and must be started again for the new scene.
 - Automatic Master writes are guarded by dominant class and ReID checks once a GID already has Master features.
 - Hovering an Identity DB row previews that GID's first feature crop.
 
