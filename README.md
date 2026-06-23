@@ -1,6 +1,6 @@
-# AutoCamTracker V1.43
+# AutoCamTracker V1.5
 
-AutoCamTracker 是一個以影片、螢幕區域、webcam 或 iPhone 作為輸入的車輛偵測、單車追蹤、數位構圖與 GID 重新辨識工具。V1.43 加入重新整理的桌面追蹤工作區、固定 Vehicle Database 側欄，以及明確的 bbox／GID 選取與連結流程。
+AutoCamTracker 是一個以影片、螢幕區域、webcam 或 iPhone 作為輸入的車輛偵測、單車追蹤、數位構圖與 GID 重新辨識工具。V1.5 加入背景偵測工作程序、批次資料庫更新、固定 Vehicle Database 側欄，以及更安全的 bbox／GID 選取與連結流程。
 
 ## 功能簡述
 
@@ -78,28 +78,28 @@ macOS webcam 若無法開啟，請到 System Settings > Privacy & Security > Cam
 
 ### iPhone / DockKit 連線
 
-1. 安裝依賴後啟動 V1.43：`.venv/bin/python -m pip install -r requirements.txt`。
-2. 在 `Input` 下拉選單選擇 `iphone`；V1.43 會在 `8765` port 啟動 WebSocket Server，畫面會顯示可連線網址與 Copy 按鈕。
+1. 安裝依賴後啟動 V1.5：`.venv/bin/python -m pip install -r requirements.txt`。
+2. 在 `Input` 下拉選單選擇 `iphone`；V1.5 會在 `8765` port 啟動 WebSocket Server，畫面會顯示可連線網址與 Copy 按鈕。
 3. 在 iOS App 輸入顯示的 `ws://<Mac 位址>:8765/ws/tracking`，按 `Connect`。
-4. iOS App 會以約 8 FPS 傳送 JPEG 相機畫面給 V1.43；桌面端完成 YOLO、BoT-SORT 與 GID ReID 後，再透過相同 WebSocket 回傳 tracking command。
+4. iOS App 會以約 8 FPS 傳送 JPEG 相機畫面給 V1.5；桌面端完成 YOLO、BoT-SORT 與 GID ReID 後，再透過相同 WebSocket 回傳 tracking command。
 5. DockKit System Tracking 會由 iOS App 自動關閉，避免手機內建人物追蹤與電腦辨識同時搶控制權。
 
 無線模式要求 Mac 與 iPhone 在可互相存取的同一區域網路。有線 USB-C 模式仍使用相同 WebSocket 協議，但 macOS 與 iOS 必須先透過 Personal Hotspot USB、USB Ethernet 或其他方式建立可互通的 IP 網路介面；單純接上充電線或 Xcode USB deploy 不會自動建立 App 的資料通道。
 
-## V1.43 注意事項
+## V1.5 注意事項
 
-- V1.43 仍以單一車輛追蹤與互動式 GID 管理為主。
+- V1.5 仍以單一車輛追蹤與互動式 GID 管理為主。
 - `Auto Add Feature` 會寫入 Master gallery；如果 Master 已存在，新增 feature 會先通過 class 與 ReID 防污染檢查。
 - 如果 YOLO / tracker 產生 `LID=None`，目前部分 Find GID / tracking 流程仍可能看不到該 bbox，這是後續版本要改善的方向。
-- 若 GID 已被舊版本寫入錯車 feature，V1.43 會防止繼續污染，但不會自動清理既有髒資料。
+- 若 GID 已被舊版本寫入錯車 feature，V1.5 會防止繼續污染，但不會自動清理既有髒資料。
 - Identity DB 是本機資料，預設位於 `outputs/vehicle_identity.sqlite3`，不應作為 release 檔案上傳。
 - `outputs/`、`.venv/`、cache、測試輸出都不屬於乾淨 release 內容。
 
 ---
 
-# AutoCamTracker V1.43 English
+# AutoCamTracker V1.5 English
 
-AutoCamTracker is a vehicle detection, single-target tracking, digital reframing, and GID re-identification tool. V1.43 adds a reorganized desktop tracking workspace, a persistent Vehicle Database sidebar, and explicit bbox/GID selection and linking actions.
+AutoCamTracker is a vehicle detection, single-target tracking, digital reframing, and GID re-identification tool. V1.5 adds a background detection worker, batched database updates, a persistent Vehicle Database sidebar, and safer bbox/GID selection and linking actions.
 
 ## Highlights
 

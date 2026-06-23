@@ -32,10 +32,12 @@ try:
     from auto_feature_sampler import AutoFeatureMode, AutoFeatureSampler
     from video_detector import InputConfig, VideoDetector
     from detection_store import DetectionStore
+    from desktop_state import IdentitySessionLinks
     from feature_gallery import FeatureGallery
     from frame_data import FrameData
     from identity_manager import GlobalIdentityManager
     from pipeline_processor import PipelineProcessor
+    from pipeline_worker import DetectionWorker
     from reframer import FramingConfig, Reframer
     from scene_cut import SceneCutDetector
     from tracking_server import TrackingWebSocketServer
@@ -44,10 +46,12 @@ except ImportError:  # pragma: no cover
     from .auto_feature_sampler import AutoFeatureMode, AutoFeatureSampler
     from .video_detector import InputConfig, VideoDetector
     from .detection_store import DetectionStore
+    from .desktop_state import IdentitySessionLinks
     from .feature_gallery import FeatureGallery
     from .frame_data import FrameData
     from .identity_manager import GlobalIdentityManager
     from .pipeline_processor import PipelineProcessor
+    from .pipeline_worker import DetectionWorker
     from .reframer import FramingConfig, Reframer
     from .scene_cut import SceneCutDetector
     from .tracking_server import TrackingWebSocketServer
@@ -56,7 +60,7 @@ except ImportError:  # pragma: no cover
 
 @dataclass
 class AppConfig:
-    window_title: str = "AutoCamTracker V1.43"
+    window_title: str = "AutoCamTracker V1.5"
     update_interval_ms: int = 15
     output_width: int = 640
     output_height: int = 360
@@ -78,6 +82,7 @@ class AutoCamTrackerApp:
 
         self.input_config = InputConfig()
         self.detector: VideoDetector | None = None
+        self.detection_worker: DetectionWorker | None = None
         self.store = DetectionStore()
         self.identity_store = VehicleIdentityStore(self.config.identity_db_path)
         self.feature_gallery = FeatureGallery(
@@ -127,6 +132,8 @@ class AutoCamTrackerApp:
         self.timeline_dragging = False
         self.refreshing_identity_panel = False
         self.selected_identity_tree_ids: set[int] = set()
+        self.identity_session_links = IdentitySessionLinks()
+        self.last_identity_panel_refresh_at = 0.0
         self.identity_preview_window: tk.Toplevel | None = None
         self.identity_preview_label: ttk.Label | None = None
         self.identity_preview_photo = None
@@ -245,33 +252,37 @@ class AutoCamTrackerApp:
         ttk.Button(tracking_controls, text="Refresh", command=self.refresh_model_options).grid(row=0, column=2, sticky="ew", padx=4)
 
         ttk.Label(tracking_controls, text="Tracker").grid(row=1, column=0, sticky="w", padx=4, pady=(6, 0))
-        ttk.Combobox(
+        self.tracker_box = ttk.Combobox(
             tracking_controls,
             textvariable=self.tracker_var,
             values=["botsort", "deepocsort"],
             width=13,
             state="readonly",
-        ).grid(row=1, column=1, sticky="ew", padx=4, pady=(6, 0))
+        )
+        self.tracker_box.grid(row=1, column=1, sticky="ew", padx=4, pady=(6, 0))
 
         ttk.Label(tracking_controls, text="Framing").grid(row=1, column=2, sticky="w", padx=(10, 2), pady=(6, 0))
-        framing_box = ttk.Combobox(
+        self.framing_box = ttk.Combobox(
             tracking_controls,
             textvariable=self.framing_var,
             values=["wide", "medium", "close"],
             width=13,
             state="readonly",
         )
-        framing_box.grid(row=1, column=3, sticky="ew", padx=4, pady=(6, 0))
-        framing_box.bind("<<ComboboxSelected>>", lambda _: self.apply_ui_config())
+        self.framing_box.grid(row=1, column=3, sticky="ew", padx=4, pady=(6, 0))
+        self.framing_box.bind("<<ComboboxSelected>>", lambda _: self.apply_ui_config())
         ttk.Button(tracking_controls, text="Auto Track", command=self.auto_select_one).grid(row=2, column=0, columnspan=2, sticky="ew", padx=4, pady=(7, 0))
         ttk.Button(tracking_controls, text="Clear", command=self.clear_selection).grid(row=2, column=2, sticky="ew", padx=4, pady=(7, 0))
         ttk.Button(tracking_controls, text="Reset", command=self.reset_tracking).grid(row=2, column=3, sticky="ew", padx=4, pady=(7, 0))
         tracking_controls.columnconfigure(1, weight=1)
         tracking_controls.columnconfigure(3, weight=1)
 
-        ttk.Button(playback_controls, text="Start", command=self.start).grid(row=0, column=0, sticky="ew", padx=4, pady=4)
-        ttk.Button(playback_controls, text="Pause", command=self.pause).grid(row=0, column=1, sticky="ew", padx=4, pady=4)
-        ttk.Button(playback_controls, text="Stop", command=self.stop).grid(row=1, column=0, sticky="ew", padx=4, pady=4)
+        self.start_button = ttk.Button(playback_controls, text="Start", command=self.start)
+        self.start_button.grid(row=0, column=0, sticky="ew", padx=4, pady=4)
+        self.pause_button = ttk.Button(playback_controls, text="Pause", command=self.pause)
+        self.pause_button.grid(row=0, column=1, sticky="ew", padx=4, pady=4)
+        self.stop_button = ttk.Button(playback_controls, text="Stop", command=self.stop)
+        self.stop_button.grid(row=1, column=0, sticky="ew", padx=4, pady=4)
         ttk.Button(playback_controls, text="Record", command=self.toggle_recording).grid(row=1, column=1, sticky="ew", padx=4, pady=4)
 
         ttk.Label(playback_controls, text="Speed").grid(row=2, column=0, sticky="w", padx=4, pady=(8, 0))
@@ -451,6 +462,7 @@ class AutoCamTrackerApp:
         self.status_var = tk.StringVar(value="Status: idle")
         ttk.Label(main, textvariable=self.status_var).grid(row=2, column=0, columnspan=2, sticky="w")
         self.refresh_identity_db_panel()
+        self._update_transport_actions()
 
     def apply_ui_config(self) -> None:
         self.input_config = self._ui_input_config()
@@ -530,7 +542,11 @@ class AutoCamTrackerApp:
             if can_resume_current_source:
                 self.running = True
                 self.last_frame_time = time()
-                self._loop()
+                if self.detection_worker is None:
+                    self.detection_worker = DetectionWorker(self.detector)
+                self.detection_worker.discard_results()
+                self._update_transport_actions()
+                self._request_worker_frame()
                 return
 
             if self.detector is not None:
@@ -544,20 +560,24 @@ class AutoCamTrackerApp:
             self.detector = VideoDetector(replace(self.input_config), frame_provider=frame_provider)
             self.detector.load_model()
             self.detector.open_source()
+            self.detection_worker = DetectionWorker(self.detector)
             self.active_input_signature = desired_signature
             self.running = True
             self.last_frame_time = time()
             self.skipped_frames = 0
-            self._loop()
+            self._update_transport_actions()
+            self._request_worker_frame()
         except Exception as exc:
             self.running = False
             if self.detector is not None:
                 self._close_detector()
                 self.detector = None
+            self._update_transport_actions()
             messagebox.showerror("Start failed", str(exc))
 
     def pause(self) -> None:
         self.running = False
+        self._update_transport_actions()
 
     def stop(self) -> None:
         self.running = False
@@ -567,6 +587,7 @@ class AutoCamTrackerApp:
         self.detector = None
         self.active_input_signature = None
         self._reset_runtime_state()
+        self._update_transport_actions()
 
     def reset_tracking(self) -> None:
         self._reset_runtime_state()
@@ -851,16 +872,33 @@ class AutoCamTrackerApp:
         if not self._is_video_source_active():
             return
 
+        was_running = self.running
+        self.running = False
+        if self.detection_worker is not None:
+            self.detection_worker.discard_results()
         target_frame = int(self.timeline_var.get())
-        if not self.detector.seek_video_frame(target_frame):
+        seek = lambda: self.detector.seek_video_frame(target_frame)
+        seek_succeeded = (
+            self.detection_worker.run_locked(seek)
+            if self.detection_worker is not None
+            else seek()
+        )
+        if not seek_succeeded:
+            self.running = was_running
+            if was_running:
+                self._request_worker_frame()
             return
 
         self.store.reset()
         self.identity_manager.reset()
         self.scene_cut_detector.reset()
         self.reframer.reset()
+        self.identity_session_links.clear()
         self.skipped_frames = 0
         self._render_current_video_frame()
+        self.running = was_running
+        if was_running:
+            self._request_worker_frame()
 
     def on_before_click(self, event) -> None:
         if self.last_frame_shape is None:
@@ -905,18 +943,33 @@ class AutoCamTrackerApp:
             "Recording scaffold toggled. VideoWriter implementation belongs here.",
         )
 
+    def _request_worker_frame(self) -> None:
+        if not self.running or self.detection_worker is None:
+            return
+        if self.detection_worker.request_frame():
+            self.loop_started_at = time()
+        self.root.after(5, self._loop)
+
     def _loop(self) -> None:
-        if not self.running or self.detector is None:
+        if not self.running or self.detector is None or self.detection_worker is None:
             return
 
-        self.loop_started_at = time()
-        inference_started_at = time()
-        frame, detections = self.detector.read_and_track()
-        self.last_inference_time_ms = (time() - inference_started_at) * 1000.0
+        result = self.detection_worker.poll()
+        if result is None:
+            self.root.after(5, self._loop)
+            return
+        if result.error is not None:
+            error = result.error
+            self.stop()
+            messagebox.showerror("Detection failed", str(error))
+            return
+
+        frame, detections = result.frame, result.detections
+        self.last_inference_time_ms = result.inference_time_ms
         if frame is None:
             if self.input_config.source_type == "iphone":
                 self.status_var.set("Status: waiting for iPhone camera frames")
-                self.root.after(30, self._loop)
+                self.root.after(30, self._request_worker_frame)
                 return
             self.stop()
             return
@@ -951,7 +1004,7 @@ class AutoCamTrackerApp:
 
         self._drop_late_video_frames()
         self._sync_timeline_from_detector()
-        self.root.after(self._next_loop_delay_ms(), self._loop)
+        self.root.after(self._next_loop_delay_ms(), self._request_worker_frame)
 
     def _process_frame(self, frame, detections, inference_time_ms: float = 0.0) -> FrameData:
         self.last_frame_shape = frame.shape
@@ -972,13 +1025,18 @@ class AutoCamTrackerApp:
         self.current_frame_data = frame_data
         self.tracking_server.publish_frame(frame_data, frame.shape)
         self._run_auto_feature_sampling(frame)
-        self.refresh_identity_db_panel()
+        self.refresh_identity_db_panel(force=False)
         return frame_data
 
     def _render_current_video_frame(self) -> None:
         if self.detector is None:
             return
-        frame, detections = self.detector.read_and_track()
+        read = self.detector.read_and_track
+        frame, detections = (
+            self.detection_worker.run_locked(read)
+            if self.detection_worker is not None
+            else read()
+        )
         if frame is None:
             return
         self._process_frame(frame, detections, self.last_inference_time_ms)
@@ -1011,7 +1069,13 @@ class AutoCamTrackerApp:
         if frames_to_skip <= 0:
             return
 
-        self.skipped_frames += self.detector.skip_video_frames(frames_to_skip)
+        skip = lambda: self.detector.skip_video_frames(frames_to_skip)
+        skipped = (
+            self.detection_worker.run_locked(skip)
+            if self.detection_worker is not None
+            else skip()
+        )
+        self.skipped_frames += skipped
 
     def _playback_speed(self) -> float:
         value = self.playback_speed_var.get().strip().lower().replace("x", "")
@@ -1057,6 +1121,7 @@ class AutoCamTrackerApp:
 
     def _reset_runtime_state(self) -> None:
         self.pipeline.reset()
+        self.identity_session_links.clear()
         self.last_frame_shape = None
         self.last_raw_frame = None
         self.current_frame_data = None
@@ -1106,9 +1171,14 @@ class AutoCamTrackerApp:
         )
         self._set_display_size(width, height)
 
-    def refresh_identity_db_panel(self) -> None:
+    def refresh_identity_db_panel(self, force: bool = True) -> None:
         if not hasattr(self, "identity_tree"):
             return
+        now = time()
+        if not force and now - self.last_identity_panel_refresh_at < 0.5:
+            self._refresh_selection_panel()
+            return
+        self.last_identity_panel_refresh_at = now
         self.refreshing_identity_panel = True
         selected_tree_ids = set(self.selected_identity_tree_ids)
         summary = self.identity_store.summary(feature_counts=self.feature_gallery.summary_by_vehicle())
@@ -1267,6 +1337,7 @@ class AutoCamTrackerApp:
                 f"(score {score:.2f})"
             )
         else:
+            self.identity_session_links.link(identity.last_track_id, vehicle_id)
             self._set_identity_mode(f"Find GID tracking GID {label}")
             self.status_var.set(
                 f"Status: tracking GID {label} on local track {identity.last_track_id} "
@@ -1289,10 +1360,22 @@ class AutoCamTrackerApp:
             self.status_var.set("Status: click a visible bbox before Link BBox")
             return "break"
         vehicle_id = vehicle_ids[0]
+        previous_vehicle_id = self.identity_session_links.vehicle_for_track(detection.track_id)
+        if previous_vehicle_id is not None and previous_vehicle_id != vehicle_id:
+            previous_label = self.identity_store.display_label(previous_vehicle_id)
+            next_label = self.identity_store.display_label(vehicle_id)
+            if not messagebox.askyesno(
+                "Relink Vehicle",
+                f"LID {detection.track_id} is linked to GID {previous_label}. "
+                f"Move it to GID {next_label}?",
+            ):
+                return "break"
+            self.identity_store.clear_track_link(previous_vehicle_id, detection.track_id)
         identity = self.identity_manager.link_detection(vehicle_id, detection, self.last_raw_frame)
         if identity is None:
             self.status_var.set(f"Status: vehicle id {vehicle_id} no longer exists")
             return "break"
+        self.identity_session_links.link(detection.track_id, vehicle_id)
         label = self.identity_store.display_label(vehicle_id)
         self.refresh_identity_db_panel()
         self._redraw_current_selection()
@@ -1305,8 +1388,19 @@ class AutoCamTrackerApp:
         if detection is None or self.last_raw_frame is None:
             self.status_var.set("Status: click a visible bbox before Add Vehicle")
             return "break"
+        existing_vehicle_id = self.identity_session_links.vehicle_for_track(detection.track_id)
+        if existing_vehicle_id is not None:
+            label = self.identity_store.display_label(existing_vehicle_id)
+            self.selected_identity_tree_ids = {existing_vehicle_id}
+            self.refresh_identity_db_panel()
+            self._set_identity_mode(f"LID {detection.track_id} already belongs to GID {label}")
+            self.status_var.set(
+                f"Status: duplicate prevented; LID {detection.track_id} is already GID {label}"
+            )
+            return "break"
         vehicle_id = self.identity_store.create_vehicle(detection, {"created_manually": True})
         self.identity_manager.link_detection(vehicle_id, detection, self.last_raw_frame)
+        self.identity_session_links.link(detection.track_id, vehicle_id)
         self.selected_identity_tree_ids = {vehicle_id}
         self.refresh_identity_db_panel()
         self._redraw_current_selection()
@@ -1485,6 +1579,7 @@ class AutoCamTrackerApp:
         for vehicle_id in vehicle_ids:
             if self.identity_store.delete_vehicle(vehicle_id):
                 self.feature_gallery.delete_vehicle_features(vehicle_id)
+                self.identity_session_links.unlink_vehicle(vehicle_id)
                 deleted_ids.append(vehicle_id)
 
         if self.identity_manager.selected_global_vehicle_id in deleted_ids:
@@ -1548,23 +1643,35 @@ class AutoCamTrackerApp:
         else:
             self.db_selection_var.set(f"Database: GID {self.identity_store.display_label(vehicle_id)}")
 
-        identity = self.identity_manager.selected_identity
-        is_linked = bool(
-            detection is not None
-            and vehicle_id is not None
-            and identity is not None
-            and identity.global_vehicle_id == vehicle_id
-            and identity.last_track_id == detection.track_id
+        linked_vehicle_id = (
+            self.identity_session_links.vehicle_for_track(detection.track_id)
+            if detection is not None
+            else None
         )
-        if is_linked:
-            self.link_state_var.set("Relation: linked")
+        is_selected_link = linked_vehicle_id is not None and linked_vehicle_id == vehicle_id
+        if linked_vehicle_id is not None:
+            linked_label = self.identity_store.display_label(linked_vehicle_id)
+            if is_selected_link:
+                self.link_state_var.set(f"Relation: linked to GID {linked_label}")
+            elif vehicle_id is not None:
+                self.link_state_var.set(
+                    f"Relation: GID {linked_label}; Link will ask before moving"
+                )
+            else:
+                self.link_state_var.set(f"Relation: linked to GID {linked_label}")
         elif detection is not None and vehicle_id is not None:
             self.link_state_var.set("Relation: ready to link")
         else:
             self.link_state_var.set("Relation: select both BBox and GID")
 
-        self._set_button_enabled(self.add_vehicle_button, detection is not None)
-        self._set_button_enabled(self.link_bbox_button, detection is not None and vehicle_id is not None)
+        self._set_button_enabled(
+            self.add_vehicle_button,
+            detection is not None and linked_vehicle_id is None,
+        )
+        self._set_button_enabled(
+            self.link_bbox_button,
+            detection is not None and vehicle_id is not None and not is_selected_link,
+        )
         self._set_button_enabled(self.find_gid_button, vehicle_id is not None)
         self._set_button_enabled(self.delete_vehicle_button, vehicle_id is not None)
 
@@ -1584,6 +1691,31 @@ class AutoCamTrackerApp:
             self.identity_advanced_frame.grid()
         else:
             self.identity_advanced_frame.grid_remove()
+
+    def _update_transport_actions(self) -> None:
+        if not hasattr(self, "start_button"):
+            return
+        has_source = self.detector is not None
+        if self.running:
+            self.start_button.configure(text="Running")
+            self._set_button_enabled(self.start_button, False)
+            self._set_button_enabled(self.pause_button, True)
+            self._set_button_enabled(self.stop_button, True)
+        elif has_source:
+            self.start_button.configure(text="Resume")
+            self._set_button_enabled(self.start_button, True)
+            self._set_button_enabled(self.pause_button, False)
+            self._set_button_enabled(self.stop_button, True)
+        else:
+            self.start_button.configure(text="Start")
+            self._set_button_enabled(self.start_button, True)
+            self._set_button_enabled(self.pause_button, False)
+            self._set_button_enabled(self.stop_button, False)
+
+        configuration_state = "disabled" if has_source else "readonly"
+        self.source_box.configure(state=configuration_state)
+        self.model_box.configure(state=configuration_state)
+        self.tracker_box.configure(state=configuration_state)
 
     def _fit_size_to_source_aspect(self, width_limit: int, height_limit: int) -> tuple[int, int]:
         if self.last_frame_shape is not None:
@@ -1615,6 +1747,9 @@ class AutoCamTrackerApp:
         return f"{minutes:02d}:{secs:02d}"
 
     def _close_detector(self) -> None:
+        if self.detection_worker is not None:
+            self.detection_worker.close()
+            self.detection_worker = None
         if self.detector is None:
             return
         clear_temp_cache = self.detector.config.source_type in {"video_file", "video_url"}

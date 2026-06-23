@@ -59,15 +59,26 @@ class VehicleIdentityStore:
     in FeatureGallery and are written only by explicit Add Feature actions.
     """
 
-    def __init__(self, db_path: Path | str) -> None:
+    def __init__(self, db_path: Path | str, commit_interval_seconds: float = 0.5) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(self.db_path)
         self.connection.row_factory = sqlite3.Row
+        self.commit_interval_seconds = max(0.0, float(commit_interval_seconds))
+        self._last_commit_at = time()
+        self._has_pending_write = False
         self._ensure_schema()
 
     def close(self) -> None:
+        self.flush()
         self.connection.close()
+
+    def flush(self) -> None:
+        if not self._has_pending_write:
+            return
+        self.connection.commit()
+        self._last_commit_at = time()
+        self._has_pending_write = False
 
     def create_vehicle(self, detection: TrackedDetection, metadata: dict[str, Any] | None = None) -> int:
         now = time()
@@ -101,7 +112,7 @@ class VehicleIdentityStore:
                 self._metadata_json(metadata),
             ),
         )
-        self.connection.commit()
+        self._commit_now()
         return int(cursor.lastrowid)
 
     def update_vehicle(
@@ -138,7 +149,8 @@ class VehicleIdentityStore:
                 vehicle_id,
             ),
         )
-        self.connection.commit()
+        self._has_pending_write = cursor.rowcount > 0 or self._has_pending_write
+        self._commit_if_due()
         return cursor.rowcount > 0
 
     def get_vehicle(self, vehicle_id: int) -> StoredVehicleIdentity | None:
@@ -190,14 +202,34 @@ class VehicleIdentityStore:
             "UPDATE vehicles SET display_name = ?, updated_at = ? WHERE id = ?",
             (value, time(), vehicle_id),
         )
-        self.connection.commit()
+        self._commit_now()
         return cursor.rowcount > 0
 
     def delete_vehicle(self, vehicle_id: int) -> bool:
         cursor = self.connection.execute("DELETE FROM vehicles WHERE id = ?", (vehicle_id,))
         deleted = cursor.rowcount > 0
-        self.connection.commit()
+        self._commit_now()
         return deleted
+
+    def clear_track_link(self, vehicle_id: int, track_id: int | None) -> bool:
+        if track_id is None:
+            return False
+        cursor = self.connection.execute(
+            "UPDATE vehicles SET last_track_id = NULL, updated_at = ? WHERE id = ? AND last_track_id = ?",
+            (time(), vehicle_id, track_id),
+        )
+        if cursor.rowcount > 0:
+            self._commit_now()
+            return True
+        return False
+
+    def _commit_if_due(self) -> None:
+        if self._has_pending_write and time() - self._last_commit_at >= self.commit_interval_seconds:
+            self.flush()
+
+    def _commit_now(self) -> None:
+        self._has_pending_write = True
+        self.flush()
 
     def summary(self, feature_counts: dict[int, dict[str, int]] | None = None, limit: int = 50) -> IdentityStoreSummary:
         feature_counts = feature_counts or {}

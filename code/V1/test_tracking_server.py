@@ -61,6 +61,7 @@ class TrackingMessageTests(unittest.TestCase):
         self.assertEqual(message["error_x"], 1.0)
         self.assertEqual(message["error_y"], -1.0)
         self.assertEqual(message["confidence"], 1.0)
+        self.assertEqual(message["source_version"], "1.5")
 
     def test_server_round_trip(self) -> None:
         server = TrackingWebSocketServer(TrackingServerConfig(host="127.0.0.1", port=18765))
