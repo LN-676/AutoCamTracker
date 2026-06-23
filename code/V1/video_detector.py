@@ -19,7 +19,7 @@ import shutil
 import sys
 import tempfile
 from time import time
-from typing import Any, Iterable, Literal
+from typing import Any, Callable, Iterable, Literal
 from urllib.parse import urlparse
 
 
@@ -77,7 +77,7 @@ class TrackedDetection:
 class VideoDetector:
     """Reads frames and runs Ultralytics YOLO track mode."""
 
-    def __init__(self, config: InputConfig) -> None:
+    def __init__(self, config: InputConfig, frame_provider: Callable[[], Any | None] | None = None) -> None:
         self.config = config
         self.model: Any | None = None
         self.tracker_adapter: DeepOcSortAdapter | None = None
@@ -88,6 +88,7 @@ class VideoDetector:
         self.frame_index = 0
         self._cv2 = None
         self._tracker_config_path: Path | None = None
+        self.frame_provider = frame_provider
 
     def load_model(self) -> None:
         cache_root = CACHE_ROOT
@@ -156,6 +157,13 @@ class VideoDetector:
             self.source_frame_count = None
             self._configure_tracker_buffer()
 
+        elif self.config.source_type == "iphone":
+            if self.frame_provider is None:
+                raise ValueError("frame_provider is required for iphone input")
+            self.source_fps = 8.0
+            self.source_frame_count = None
+            self._configure_tracker_buffer()
+
         else:
             raise ValueError(f"Unsupported source_type: {self.config.source_type}")
 
@@ -182,6 +190,14 @@ class VideoDetector:
             frame = np.array(image)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
             self.frame_index += 1
+            return frame
+
+        if self.config.source_type == "iphone":
+            if self.frame_provider is None:
+                raise RuntimeError("iPhone frame provider is unavailable")
+            frame = self.frame_provider()
+            if frame is not None:
+                self.frame_index += 1
             return frame
 
         return None
@@ -327,8 +343,8 @@ class VideoDetector:
                     "gmc_method: sparseOptFlow",
                     "proximity_thresh: 0.5",
                     "appearance_thresh: 0.8",
-                    "with_reid: False",
-                    "model: auto",
+                    "with_reid: True",
+                    f"model: {(MODEL_DIR / 'yolo26s-reid.onnx').as_posix()}",
                     "",
                 ]
             ),

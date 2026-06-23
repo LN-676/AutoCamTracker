@@ -27,6 +27,9 @@ final class DockKitManager: ObservableObject, DockKitMotorControlling {
 
 #if !targetEnvironment(simulator)
     private var accessory: DockAccessory?
+    private var motorControlMode: MotorControlMode = .unknown
+    private var activeOrientationProgress: Progress?
+    private var orientationCommandInFlight = false
 #endif
 
     init(logger: AppLogger) {
@@ -160,13 +163,35 @@ final class DockKitManager: ObservableObject, DockKitMotorControlling {
             return
         }
 
+        if motorControlMode == .relativeOrientation {
+            await applyRelativeOrientationFallback(
+                accessory: accessory,
+                yaw: yaw,
+                pitch: pitch,
+                roll: roll
+            )
+            return
+        }
+
         let velocity = Vector3D(x: pitch, y: yaw, z: roll)
         do {
             try await accessory.setAngularVelocity(velocity)
+            motorControlMode = .angularVelocity
             lastError = nil
             logger.log(
                 .success,
                 String(format: "setAngularVelocity(pitch: %.3f, yaw: %.3f, roll: %.3f) succeeded.", pitch, yaw, roll)
+            )
+        } catch DockKitError.notSupportedByDevice {
+            if motorControlMode != .relativeOrientation {
+                logger.log(.warning, "Angular velocity is unsupported; switching to relative orientation fallback.")
+            }
+            motorControlMode = .relativeOrientation
+            await applyRelativeOrientationFallback(
+                accessory: accessory,
+                yaw: yaw,
+                pitch: pitch,
+                roll: roll
             )
         } catch {
             recordError(
@@ -187,6 +212,14 @@ final class DockKitManager: ObservableObject, DockKitMotorControlling {
         }
         guard isSystemTrackingEnabled == false else {
             logger.log(.info, "STOP skipped: System Tracking owns the motors and no manual velocity is active.")
+            return
+        }
+        if motorControlMode == .relativeOrientation {
+            activeOrientationProgress?.cancel()
+            activeOrientationProgress = nil
+            orientationCommandInFlight = false
+            lastError = nil
+            logger.log(.success, "STOP succeeded: relative orientation command cancelled.")
             return
         }
         do {
@@ -295,6 +328,9 @@ final class DockKitManager: ObservableObject, DockKitMotorControlling {
         )
         if stateChange.state == .docked, let newAccessory = stateChange.accessory {
             accessory = newAccessory
+            motorControlMode = .unknown
+            activeOrientationProgress = nil
+            orientationCommandInFlight = false
             accessoryStatus = .docked
             let model = newAccessory.hardwareModel ?? "DockKit Accessory"
             accessoryName = "\(model) • \(String(describing: newAccessory.identifier))"
@@ -304,11 +340,20 @@ final class DockKitManager: ObservableObject, DockKitMotorControlling {
                 .success,
                 "Accessory docked: \(accessoryName ?? model); firmware: \(newAccessory.firmwareVersion ?? "unknown")."
             )
+            if currentTracking, !isManualModeTransitioning {
+                logger.log(.info, "AutoCamTracker disables iPhone System Tracking so only computer tracking is used.")
+                Task { @MainActor [weak self] in
+                    _ = await self?.enterManualMode()
+                }
+            }
             if previousTracking == false, currentTracking {
-                logger.log(.warning, "Physical tracking button restored System Tracking; manual controls are locked.")
+                logger.log(.warning, "Physical tracking button restored System Tracking; turning it OFF again.")
             }
         } else {
             accessory = nil
+            motorControlMode = .unknown
+            activeOrientationProgress = nil
+            orientationCommandInFlight = false
             accessoryStatus = .notFound
             accessoryName = nil
             isSystemTrackingEnabled = nil
@@ -337,6 +382,40 @@ final class DockKitManager: ObservableObject, DockKitMotorControlling {
             try? await Task.sleep(for: .milliseconds(50))
         }
     }
+
+    private func applyRelativeOrientationFallback(
+        accessory: DockAccessory,
+        yaw: Double,
+        pitch: Double,
+        roll: Double
+    ) async {
+        guard !orientationCommandInFlight else { return }
+        orientationCommandInFlight = true
+        defer { orientationCommandInFlight = false }
+
+        let yawStep = max(-0.04, min(0.04, yaw * 0.18))
+        let pitchStep = max(-0.03, min(0.03, pitch * 0.18))
+        let rollStep = max(-0.02, min(0.02, roll * 0.18))
+        do {
+            let progress = try await accessory.setOrientation(
+                Vector3D(x: pitchStep, y: yawStep, z: rollStep),
+                duration: .milliseconds(80),
+                relative: true
+            )
+            activeOrientationProgress = progress
+            lastError = nil
+            logger.log(
+                .success,
+                String(format: "Relative fallback(pitch: %.3f, yaw: %.3f, roll: %.3f) started.", pitchStep, yawStep, rollStep)
+            )
+            await waitForProgress(progress, timeout: .milliseconds(250))
+            if activeOrientationProgress === progress {
+                activeOrientationProgress = nil
+            }
+        } catch {
+            recordError(api: "relative orientation fallback", error: error)
+        }
+    }
 #endif
 
     private func recordError(api: String, error: Error) {
@@ -356,6 +435,12 @@ final class DockKitManager: ObservableObject, DockKitMotorControlling {
         lastError = detail
         logger.log(.error, detail)
     }
+}
+
+private enum MotorControlMode {
+    case unknown
+    case angularVelocity
+    case relativeOrientation
 }
 
 private enum ManualModeError: LocalizedError {

@@ -70,22 +70,35 @@ class TrackingMessageTests(unittest.TestCase):
             sleep(0.01)
         self.assertTrue(server.is_running)
         try:
-            initial, pulse = asyncio.run(self._receive_server_messages(server))
+            initial, pulse, camera_frame = asyncio.run(self._receive_server_messages(server))
         finally:
             server.stop()
 
         self.assertFalse(initial["target_locked"])
         self.assertTrue(pulse["target_locked"])
         self.assertAlmostEqual(pulse["error_x"], 0.12)
+        self.assertEqual(camera_frame.shape, (24, 32, 3))
 
     async def _receive_server_messages(self, server: TrackingWebSocketServer):
         from websockets.asyncio.client import connect
+        import cv2
+        import numpy as np
 
         async with connect("ws://127.0.0.1:18765/ws/tracking") as websocket:
             initial = json.loads(await asyncio.wait_for(websocket.recv(), timeout=2.0))
             server.publish_test_pulse()
             pulse = json.loads(await asyncio.wait_for(websocket.recv(), timeout=2.0))
-            return initial, pulse
+            ok, jpeg = cv2.imencode(".jpg", np.zeros((24, 32, 3), dtype=np.uint8))
+            self.assertTrue(ok)
+            await websocket.send(jpeg.tobytes())
+            camera_frame = None
+            for _ in range(50):
+                await asyncio.sleep(0.01)
+                camera_frame = server.read_latest_frame()
+                if camera_frame is not None:
+                    break
+            self.assertIsNotNone(camera_frame)
+            return initial, pulse, camera_frame
 
 
 if __name__ == "__main__":

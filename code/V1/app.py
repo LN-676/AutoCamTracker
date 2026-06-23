@@ -56,7 +56,7 @@ except ImportError:  # pragma: no cover
 
 @dataclass
 class AppConfig:
-    window_title: str = "AutoCamTracker V1.41"
+    window_title: str = "AutoCamTracker V1.42"
     update_interval_ms: int = 15
     output_width: int = 640
     output_height: int = 360
@@ -120,6 +120,8 @@ class AutoCamTrackerApp:
         self.current_frame_data: FrameData | None = None
         self.display_width = self.config.output_width
         self.display_height = self.config.output_height
+        self.preview_width_limit = self.display_width
+        self.preview_height_limit = self.display_height
         self.rendered_image_width = self.display_width
         self.rendered_image_height = self.display_height
         self.timeline_dragging = False
@@ -141,25 +143,33 @@ class AutoCamTrackerApp:
         self.refresh_reid_model_options()
 
     def _build_ui(self) -> None:
-        main = ttk.Frame(self.root, padding=10)
+        style = ttk.Style(self.root)
+        style.configure("TButton", padding=(5, 2))
+        style.configure("TCombobox", padding=1)
+        style.configure("Treeview", rowheight=21)
+        style.configure("Preview.TLabel", background="#202124", foreground="#f1f3f4")
+        style.configure("PreviewTitle.TLabel", font=("TkDefaultFont", 11, "bold"))
+
+        main = ttk.Frame(self.root, padding=6)
         main.grid(row=0, column=0, sticky="nsew")
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
 
         controls = ttk.Frame(main)
-        controls.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        controls.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 4))
 
-        source_controls = ttk.LabelFrame(controls, text="Source", padding=8)
-        source_controls.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
-        tracking_controls = ttk.LabelFrame(controls, text="Tracking", padding=8)
-        tracking_controls.grid(row=0, column=1, sticky="nsew", padx=4, pady=4)
-        playback_controls = ttk.LabelFrame(controls, text="Playback", padding=8)
-        playback_controls.grid(row=1, column=1, sticky="nsew", padx=4, pady=4)
-        identity_controls = ttk.LabelFrame(controls, text="Identity DB", padding=6)
-        identity_controls.grid(row=0, column=2, rowspan=2, sticky="nw", padx=4, pady=4)
-        for column in range(2):
-            controls.columnconfigure(column, weight=0, minsize=207)
-        controls.columnconfigure(2, weight=0, minsize=414)
+        source_controls = ttk.LabelFrame(controls, text="Source", padding=5)
+        source_controls.grid(row=0, column=0, sticky="nsew", padx=3, pady=2)
+        tracking_controls = ttk.LabelFrame(controls, text="Tracking", padding=5)
+        tracking_controls.grid(row=0, column=1, sticky="nsew", padx=3, pady=2)
+        playback_controls = ttk.LabelFrame(controls, text="Playback", padding=5)
+        playback_controls.grid(row=0, column=2, sticky="nsew", padx=3, pady=2)
+        identity_controls = ttk.LabelFrame(controls, text="Identity DB", padding=4)
+        identity_controls.grid(row=0, column=3, sticky="nsew", padx=3, pady=2)
+        controls.columnconfigure(0, weight=1, minsize=220)
+        controls.columnconfigure(1, weight=1, minsize=250)
+        controls.columnconfigure(2, weight=1, minsize=180)
+        controls.columnconfigure(3, weight=2, minsize=420)
 
         self.source_var = tk.StringVar(value="webcam")
         self.tracker_var = tk.StringVar(value="botsort")
@@ -189,27 +199,37 @@ class AutoCamTrackerApp:
         )
         self.source_box.grid(row=0, column=1, sticky="ew", padx=4)
         self.source_box.bind("<<ComboboxSelected>>", self.on_source_selected)
-        ttk.Button(source_controls, text="Browse Video", command=self.choose_video_file).grid(row=1, column=0, sticky="ew", padx=4, pady=(8, 0))
-        ttk.Button(source_controls, text="Screen Region", command=self.select_screen_region).grid(row=1, column=1, sticky="ew", padx=4, pady=(8, 0))
+        self.browse_video_button = ttk.Button(source_controls, text="Browse Video", command=self.choose_video_file)
+        self.browse_video_button.grid(row=1, column=0, columnspan=2, sticky="ew", padx=4, pady=(5, 0))
+        self.screen_region_button = ttk.Button(source_controls, text="Select Screen Region", command=self.select_screen_region)
+        self.screen_region_button.grid(row=1, column=0, columnspan=2, sticky="ew", padx=4, pady=(5, 0))
 
-        ttk.Label(source_controls, text="URL").grid(row=2, column=0, sticky="w", padx=4, pady=(8, 0))
-        url_entry = ttk.Entry(source_controls, textvariable=self.video_url_var)
-        url_entry.grid(row=2, column=1, sticky="ew", padx=4, pady=(8, 0))
-        url_entry.bind("<Return>", self.apply_video_url)
-        url_entry.bind("<FocusOut>", self.apply_video_url)
+        self.url_label = ttk.Label(source_controls, text="URL")
+        self.url_label.grid(row=1, column=0, sticky="w", padx=4, pady=(5, 0))
+        self.url_entry = ttk.Entry(source_controls, textvariable=self.video_url_var)
+        self.url_entry.grid(row=1, column=1, sticky="ew", padx=4, pady=(5, 0))
+        self.url_entry.bind("<Return>", self.apply_video_url)
+        self.url_entry.bind("<FocusOut>", self.apply_video_url)
 
-        ttk.Label(source_controls, textvariable=self.video_path_var, wraplength=220).grid(row=3, column=0, columnspan=2, sticky="w", padx=4, pady=(8, 0))
-        ttk.Label(source_controls, textvariable=self.video_url_status_var, wraplength=220).grid(row=4, column=0, columnspan=2, sticky="w", padx=4, pady=(3, 0))
-        ttk.Label(source_controls, textvariable=self.screen_region_var, wraplength=220).grid(row=5, column=0, columnspan=2, sticky="w", padx=4, pady=(3, 0))
+        self.video_path_label = ttk.Label(source_controls, textvariable=self.video_path_var, wraplength=220)
+        self.video_path_label.grid(row=2, column=0, columnspan=2, sticky="w", padx=4, pady=(3, 0))
+        self.video_url_status_label = ttk.Label(source_controls, textvariable=self.video_url_status_var, wraplength=220)
+        self.video_url_status_label.grid(row=2, column=0, columnspan=2, sticky="w", padx=4, pady=(3, 0))
+        self.screen_region_label = ttk.Label(source_controls, textvariable=self.screen_region_var, wraplength=220)
+        self.screen_region_label.grid(row=2, column=0, columnspan=2, sticky="w", padx=4, pady=(3, 0))
         self.iphone_connection_var = tk.StringVar(value="iPhone link: off")
-        ttk.Label(source_controls, textvariable=self.iphone_connection_var, wraplength=220).grid(
-            row=6, column=0, columnspan=2, sticky="w", padx=4, pady=(3, 0)
-        )
-        ttk.Button(source_controls, text="Send iPhone Test Pulse", command=self.send_iphone_test_pulse).grid(
-            row=7, column=0, columnspan=2, sticky="ew", padx=4, pady=(6, 0)
-        )
+        self.iphone_url_var = tk.StringVar(value=self.tracking_server.preferred_url)
+        self.iphone_connection_label = ttk.Label(source_controls, textvariable=self.iphone_connection_var, wraplength=145)
+        self.iphone_connection_label.grid(row=1, column=0, sticky="w", padx=4, pady=(4, 0))
+        self.iphone_url_entry = ttk.Entry(source_controls, textvariable=self.iphone_url_var, state="readonly")
+        self.iphone_url_entry.grid(row=2, column=0, sticky="ew", padx=4, pady=(4, 0))
+        self.iphone_copy_button = ttk.Button(source_controls, text="Copy", width=7, command=self.copy_iphone_url)
+        self.iphone_copy_button.grid(row=2, column=1, sticky="ew", padx=4, pady=(4, 0))
+        self.iphone_test_button = ttk.Button(source_controls, text="Test", width=7, command=self.send_iphone_test_pulse)
+        self.iphone_test_button.grid(row=1, column=1, sticky="ew", padx=4, pady=(4, 0))
         source_controls.columnconfigure(0, weight=1)
         source_controls.columnconfigure(1, weight=1)
+        self._update_source_controls()
 
         ttk.Label(tracking_controls, text="Model").grid(row=0, column=0, sticky="w", padx=4)
         self.model_box = ttk.Combobox(
@@ -271,7 +291,7 @@ class AutoCamTrackerApp:
         )
         ttk.Button(
             identity_controls,
-            text="Manual Add",
+            text="Manual Add 1 Photo",
             command=self.add_feature_to_selected_identity,
         ).grid(row=1, column=2, columnspan=2, sticky="ew", padx=2, pady=(4, 0))
         ttk.Button(identity_controls, text="Find GID", command=self.track_selected_identity_from_db).grid(
@@ -297,7 +317,7 @@ class AutoCamTrackerApp:
             identity_controls,
             columns=("gid", "type", "lid", "master", "pending", "candidate", "frame", "conf"),
             show="headings",
-            height=4,
+            height=3,
         )
         headings = {
             "gid": "GID",
@@ -363,16 +383,16 @@ class AutoCamTrackerApp:
         views.rowconfigure(1, weight=1)
         views.bind("<Configure>", self.on_views_resize)
 
-        ttk.Label(views, text="Before: raw + detection").grid(row=0, column=0)
-        ttk.Label(views, text="After: reframe output").grid(row=0, column=1)
+        ttk.Label(views, text="Before · Detection", style="PreviewTitle.TLabel").grid(row=0, column=0, pady=(2, 0))
+        ttk.Label(views, text="After · Reframe", style="PreviewTitle.TLabel").grid(row=0, column=1, pady=(2, 0))
 
-        self.before_label = ttk.Label(views)
-        self.before_label.grid(row=1, column=0, padx=6, pady=6, sticky="nsew")
-        self.before_label.configure(cursor="hand2", anchor="nw")
+        self.before_label = ttk.Label(views, style="Preview.TLabel")
+        self.before_label.grid(row=1, column=0, padx=(2, 4), pady=4, sticky="nsew")
+        self.before_label.configure(cursor="hand2", anchor="center")
         self.before_label.bind("<Button-1>", self.on_before_click)
-        self.after_label = ttk.Label(views)
-        self.after_label.grid(row=1, column=1, padx=6, pady=6, sticky="nsew")
-        self.after_label.configure(anchor="nw")
+        self.after_label = ttk.Label(views, style="Preview.TLabel")
+        self.after_label.grid(row=1, column=1, padx=(4, 2), pady=4, sticky="nsew")
+        self.after_label.configure(anchor="center")
 
         timeline = ttk.Frame(views)
         timeline.grid(row=2, column=0, sticky="ew", padx=6, pady=(0, 6))
@@ -463,11 +483,6 @@ class AutoCamTrackerApp:
             self.apply_ui_config()
             if self.input_config.source_type == "iphone":
                 self._start_iphone_link()
-                self.running = False
-                self.status_var.set(
-                    "Status: iPhone phase-1 link ready; image streaming is reserved for phase 2"
-                )
-                return
             desired_signature = self._input_signature(self.input_config)
             can_resume_current_source = (
                 self.detector is not None
@@ -483,7 +498,12 @@ class AutoCamTrackerApp:
             if self.detector is not None:
                 self._close_detector()
             self._reset_runtime_state()
-            self.detector = VideoDetector(replace(self.input_config))
+            frame_provider = (
+                self.tracking_server.read_latest_frame
+                if self.input_config.source_type == "iphone"
+                else None
+            )
+            self.detector = VideoDetector(replace(self.input_config), frame_provider=frame_provider)
             self.detector.load_model()
             self.detector.open_source()
             self.active_input_signature = desired_signature
@@ -529,16 +549,68 @@ class AutoCamTrackerApp:
         )
         if path:
             self.source_var.set("video_file")
+            self._update_source_controls()
             self.input_config.video_path = path
             self.video_path_var.set(f"Video: {self._short_label(Path(path).name)}")
 
     def on_source_selected(self, _event=None) -> None:
+        self._update_source_controls()
         if self.source_var.get() == "iphone":
             self._start_iphone_link()
 
+    def _update_source_controls(self) -> None:
+        if not hasattr(self, "browse_video_button"):
+            return
+        widgets = (
+            self.browse_video_button,
+            self.screen_region_button,
+            self.url_label,
+            self.url_entry,
+            self.video_path_label,
+            self.video_url_status_label,
+            self.screen_region_label,
+            self.iphone_connection_label,
+            self.iphone_url_entry,
+            self.iphone_copy_button,
+            self.iphone_test_button,
+        )
+        for widget in widgets:
+            widget.grid_remove()
+
+        source = self.source_var.get()
+        if source == "video_file":
+            self.browse_video_button.grid()
+            self.video_path_label.grid()
+        elif source == "video_url":
+            self.url_label.grid()
+            self.url_entry.grid()
+            self.video_url_status_label.grid()
+        elif source == "screen_region":
+            self.screen_region_button.grid()
+            self.screen_region_label.grid()
+        elif source == "iphone":
+            self.iphone_connection_label.grid()
+            self._refresh_iphone_url()
+            self.iphone_url_entry.grid()
+            self.iphone_copy_button.grid()
+            self.iphone_test_button.grid()
+
     def _start_iphone_link(self) -> None:
+        self._refresh_iphone_url()
         self.tracking_server.start()
         self.iphone_connection_var.set("iPhone link: starting…")
+
+    def _refresh_iphone_url(self) -> str:
+        url = self.tracking_server.preferred_url
+        self.iphone_url_var.set(url)
+        return url
+
+    def copy_iphone_url(self) -> None:
+        url = self._refresh_iphone_url()
+        self.root.clipboard_clear()
+        self.root.clipboard_append(url)
+        self.root.update_idletasks()
+        self.status_var.set(f"Status: copied iPhone URL: {url}")
 
     def _queue_iphone_status(self, message: str) -> None:
         self.iphone_status_queue.put(message)
@@ -574,6 +646,7 @@ class AutoCamTrackerApp:
             self.video_url_status_var.set("No video URL selected")
             return
         self.source_var.set("video_url")
+        self._update_source_controls()
         self.input_config.video_url = video_url
         self.video_url_status_var.set(f"URL: {self._short_label(video_url)}")
 
@@ -669,6 +742,7 @@ class AutoCamTrackerApp:
             height = max(1, y2 - y1)
             self.input_config.screen_region = (x1, y1, width, height)
             self.source_var.set("screen_region")
+            self._update_source_controls()
             self.screen_region_var.set(f"Screen region: x={x1}, y={y1}, w={width}, h={height}")
             selector.destroy()
 
@@ -716,6 +790,8 @@ class AutoCamTrackerApp:
     def on_views_resize(self, event) -> None:
         width_limit = max(160, (event.width - 24) // 2)
         height_limit = max(90, event.height - 72)
+        self.preview_width_limit = width_limit
+        self.preview_height_limit = height_limit
         width, height = self._fit_size_to_source_aspect(width_limit, height_limit)
         if self._set_display_size(width, height) and self.current_frame_data is not None:
             self._update_images(
@@ -753,10 +829,14 @@ class AutoCamTrackerApp:
         frame_height, frame_width = self.last_frame_shape[:2]
         image_width = max(1, self.rendered_image_width)
         image_height = max(1, self.rendered_image_height)
-        if event.x < 0 or event.y < 0 or event.x > image_width or event.y > image_height:
+        offset_x = max(0, (self.before_label.winfo_width() - image_width) // 2)
+        offset_y = max(0, (self.before_label.winfo_height() - image_height) // 2)
+        image_x = event.x - offset_x
+        image_y = event.y - offset_y
+        if image_x < 0 or image_y < 0 or image_x > image_width or image_y > image_height:
             return
-        frame_x = event.x * frame_width / image_width
-        frame_y = event.y * frame_height / image_height
+        frame_x = image_x * frame_width / image_width
+        frame_y = image_y * frame_height / image_height
 
         candidate = self.store.get_candidate_at_point(frame_x, frame_y, self.last_frame_shape)
         if candidate is None:
@@ -814,6 +894,10 @@ class AutoCamTrackerApp:
         frame, detections = self.detector.read_and_track()
         self.last_inference_time_ms = (time() - inference_started_at) * 1000.0
         if frame is None:
+            if self.input_config.source_type == "iphone":
+                self.status_var.set("Status: waiting for iPhone camera frames")
+                self.root.after(30, self._loop)
+                return
             self.stop()
             return
 
@@ -996,7 +1080,10 @@ class AutoCamTrackerApp:
         self.config.output_height = frame_h
         self.reframer.config.output_width = frame_w
         self.reframer.config.output_height = frame_h
-        width, height = self._fit_size_to_source_aspect(self.display_width, self.display_height)
+        width, height = self._fit_size_to_source_aspect(
+            self.preview_width_limit,
+            self.preview_height_limit,
+        )
         self._set_display_size(width, height)
 
     def refresh_identity_db_panel(self) -> None:

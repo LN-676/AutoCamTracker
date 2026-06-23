@@ -1,21 +1,65 @@
 @preconcurrency import AVFoundation
 import Combine
+import CoreImage
 import Foundation
+import UIKit
+
+enum CameraStreamOrientation: String, CaseIterable, Identifiable {
+    case portrait
+    case landscapeLeft
+    case landscapeRight
+
+    var id: Self { self }
+    var label: String {
+        switch self {
+        case .portrait: "直式"
+        case .landscapeLeft, .landscapeRight: "橫式"
+        }
+    }
+
+    var imageOrientation: CGImagePropertyOrientation {
+        switch self {
+        case .portrait: .right
+        case .landscapeLeft: .down
+        case .landscapeRight: .up
+        }
+    }
+}
 
 @MainActor
 final class CameraSessionService: ObservableObject {
     var session: AVCaptureSession { capture.session }
+    var onJPEGFrame: (@Sendable (Data) -> Void)? {
+        didSet { capture.frameStreamer.onFrame = onJPEGFrame }
+    }
 
     @Published private(set) var isRunning = false
     @Published private(set) var authorizationStatus = AVCaptureDevice.authorizationStatus(for: .video)
     @Published private(set) var lastError: String?
+    @Published private(set) var streamOrientation: CameraStreamOrientation = .portrait
+    @Published private(set) var zoomFactor: CGFloat = 1
+    @Published private(set) var minimumZoomFactor: CGFloat = 1
+    @Published private(set) var maximumZoomFactor: CGFloat = 1
+    @Published private(set) var displayZoomFactorMultiplier: CGFloat = 1
+
+    var displayZoomFactor: CGFloat { zoomFactor * displayZoomFactorMultiplier }
+    var minimumDisplayZoomFactor: CGFloat { minimumZoomFactor * displayZoomFactorMultiplier }
+    var maximumDisplayZoomFactor: CGFloat { maximumZoomFactor * displayZoomFactorMultiplier }
 
     private let logger: AppLogger
     private let sessionQueue = DispatchQueue(label: "com.linen.DockKitTester.camera-session")
     private let capture = CaptureSessionBox()
+    private var orientationObserver: AnyCancellable?
 
     init(logger: AppLogger) {
         self.logger = logger
+        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        orientationObserver = NotificationCenter.default.publisher(
+            for: UIDevice.orientationDidChangeNotification
+        )
+        .sink { [weak self] _ in
+            Task { @MainActor in self?.updateOrientationFromDevice() }
+        }
     }
 
     func start() async {
@@ -37,12 +81,84 @@ final class CameraSessionService: ObservableObject {
 
         do {
             try await configureAndStart()
+            minimumZoomFactor = capture.minimumZoomFactor
+            maximumZoomFactor = capture.maximumZoomFactor
+            zoomFactor = capture.zoomFactor
+            displayZoomFactorMultiplier = capture.displayZoomFactorMultiplier
+            updateOrientationFromDevice()
             isRunning = true
             lastError = nil
             logger.log(.success, "Rear camera capture session started; DockKit discovery is active.")
         } catch {
             recordError("Camera capture session failed: \(error.localizedDescription) [\(String(reflecting: error))]")
         }
+    }
+
+
+    func setZoom(_ requestedFactor: CGFloat) {
+        let factor = min(max(requestedFactor, minimumZoomFactor), maximumZoomFactor)
+        zoomFactor = factor
+        let capture = capture
+        sessionQueue.async {
+            guard let camera = capture.camera else { return }
+            do {
+                try camera.lockForConfiguration()
+                camera.videoZoomFactor = min(
+                    max(factor, camera.minAvailableVideoZoomFactor),
+                    camera.maxAvailableVideoZoomFactor
+                )
+                camera.unlockForConfiguration()
+            } catch {
+                Task { @MainActor [weak self] in
+                    self?.recordError("Camera zoom failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    func setDisplayZoom(_ requestedFactor: CGFloat) {
+        setZoom(requestedFactor / max(displayZoomFactorMultiplier, 0.01))
+    }
+
+    func focus(at devicePoint: CGPoint) {
+        let capture = capture
+        sessionQueue.async {
+            guard let camera = capture.camera else { return }
+            do {
+                try camera.lockForConfiguration()
+                if camera.isFocusPointOfInterestSupported {
+                    camera.focusPointOfInterest = devicePoint
+                    if camera.isFocusModeSupported(.autoFocus) {
+                        camera.focusMode = .autoFocus
+                    }
+                }
+                if camera.isExposurePointOfInterestSupported {
+                    camera.exposurePointOfInterest = devicePoint
+                    if camera.isExposureModeSupported(.continuousAutoExposure) {
+                        camera.exposureMode = .continuousAutoExposure
+                    }
+                }
+                camera.isSubjectAreaChangeMonitoringEnabled = true
+                camera.unlockForConfiguration()
+            } catch {
+                Task { @MainActor [weak self] in
+                    self?.recordError("Camera focus failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    private func updateOrientationFromDevice() {
+        let newOrientation: CameraStreamOrientation
+        switch UIDevice.current.orientation {
+        case .landscapeLeft: newOrientation = .landscapeLeft
+        case .landscapeRight: newOrientation = .landscapeRight
+        case .portrait, .portraitUpsideDown: newOrientation = .portrait
+        default: return
+        }
+        guard newOrientation != streamOrientation else { return }
+        streamOrientation = newOrientation
+        capture.frameStreamer.setOrientation(newOrientation)
     }
 
     func stop() async {
@@ -69,11 +185,7 @@ final class CameraSessionService: ObservableObject {
                         capture.session.beginConfiguration()
                         capture.session.sessionPreset = .high
 
-                        guard let camera = AVCaptureDevice.default(
-                            .builtInWideAngleCamera,
-                            for: .video,
-                            position: .back
-                        ) else {
+                        guard let camera = Self.preferredRearCamera() else {
                             capture.session.commitConfiguration()
                             throw CameraSessionError.rearCameraUnavailable
                         }
@@ -84,9 +196,18 @@ final class CameraSessionService: ObservableObject {
                             throw CameraSessionError.cannotAddInput
                         }
                         capture.session.addInput(input)
+                        capture.camera = camera
+                        capture.minimumZoomFactor = camera.minAvailableVideoZoomFactor
+                        capture.maximumZoomFactor = min(camera.maxAvailableVideoZoomFactor, 10)
+                        capture.zoomFactor = camera.videoZoomFactor
+                        capture.displayZoomFactorMultiplier = camera.displayVideoZoomFactorMultiplier
 
                         let output = AVCaptureVideoDataOutput()
                         output.alwaysDiscardsLateVideoFrames = true
+                        output.videoSettings = [
+                            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+                        ]
+                        output.setSampleBufferDelegate(capture.frameStreamer, queue: capture.frameQueue)
                         guard capture.session.canAddOutput(output) else {
                             capture.session.commitConfiguration()
                             throw CameraSessionError.cannotAddOutput
@@ -107,6 +228,29 @@ final class CameraSessionService: ObservableObject {
         }
     }
 
+
+    private nonisolated static func preferredRearCamera() -> AVCaptureDevice? {
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [
+                .builtInTripleCamera,
+                .builtInDualWideCamera,
+                .builtInDualCamera,
+                .builtInWideAngleCamera,
+            ],
+            mediaType: .video,
+            position: .back
+        )
+        let priority: [AVCaptureDevice.DeviceType] = [
+            .builtInTripleCamera,
+            .builtInDualWideCamera,
+            .builtInDualCamera,
+            .builtInWideAngleCamera,
+        ]
+        return priority.lazy.compactMap { type in
+            discovery.devices.first(where: { $0.deviceType == type })
+        }.first
+    }
+
     private func recordError(_ message: String) {
         lastError = message
         isRunning = false
@@ -116,7 +260,60 @@ final class CameraSessionService: ObservableObject {
 
 private final class CaptureSessionBox: @unchecked Sendable {
     let session = AVCaptureSession()
+    let frameQueue = DispatchQueue(label: "com.linen.DockKitTester.camera-frames")
+    let frameStreamer = JPEGFrameStreamer()
+    var camera: AVCaptureDevice?
+    var minimumZoomFactor: CGFloat = 1
+    var maximumZoomFactor: CGFloat = 1
+    var zoomFactor: CGFloat = 1
+    var displayZoomFactorMultiplier: CGFloat = 1
     var isConfigured = false
+}
+
+private final class JPEGFrameStreamer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
+    var onFrame: (@Sendable (Data) -> Void)?
+
+    private let context = CIContext(options: [.cacheIntermediates: false])
+    private let colorSpace = CGColorSpaceCreateDeviceRGB()
+    private var lastFrameTime = 0.0
+    private let minimumFrameInterval = 1.0 / 8.0
+    private let orientationLock = NSLock()
+    private var orientation: CameraStreamOrientation = .portrait
+
+    func setOrientation(_ newOrientation: CameraStreamOrientation) {
+        orientationLock.lock()
+        orientation = newOrientation
+        orientationLock.unlock()
+    }
+
+    func captureOutput(
+        _ output: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from connection: AVCaptureConnection
+    ) {
+        guard onFrame != nil,
+              let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+
+        let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
+        guard timestamp - lastFrameTime >= minimumFrameInterval else { return }
+        lastFrameTime = timestamp
+
+        orientationLock.lock()
+        let currentOrientation = orientation
+        orientationLock.unlock()
+        let cameraImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let source = cameraImage.oriented(currentOrientation.imageOrientation)
+        let targetWidth = 640.0
+        let scale = targetWidth / max(1.0, source.extent.width)
+        let resized = source.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        guard let cgImage = context.createCGImage(
+            resized,
+            from: resized.extent,
+            format: .RGBA8,
+            colorSpace: colorSpace
+        ), let jpeg = UIImage(cgImage: cgImage).jpegData(compressionQuality: 0.55) else { return }
+        onFrame?(jpeg)
+    }
 }
 
 private enum CameraSessionError: LocalizedError {

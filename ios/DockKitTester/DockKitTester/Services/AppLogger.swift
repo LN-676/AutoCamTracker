@@ -11,6 +11,7 @@ final class AppLogger: ObservableObject {
     }
 
     func log(_ level: LogLevel, _ message: String) {
+        print("[DockKitTester] [\(level.rawValue.uppercased())] \(message)")
         entries.append(AppLogEntry(level: level, message: message))
         if entries.count > maximumEntries {
             entries.removeFirst(entries.count - maximumEntries)

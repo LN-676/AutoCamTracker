@@ -39,13 +39,11 @@ struct StatusPanelView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!manager.isDocked || manager.isManualControlReady || manager.isManualModeTransitioning)
-
-                Button("Exit / Tracking ON") {
-                    Task { await manager.enableSystemTracking() }
-                }
-                .buttonStyle(.bordered)
-                .disabled(!manager.isDocked || manager.isSystemTrackingEnabled != false || manager.isManualModeTransitioning)
             }
+
+            Label("iPhone 人像追蹤保持關閉，畫面只交給電腦辨識。", systemImage: "person.crop.circle.badge.xmark")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             if manager.isManualModeTransitioning {
                 ProgressView("Verifying DockKit tracking state…")

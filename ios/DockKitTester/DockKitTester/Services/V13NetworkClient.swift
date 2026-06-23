@@ -14,6 +14,7 @@ final class V13NetworkClient: ObservableObject {
 
     @Published private(set) var status: ConnectionStatus = .offline
     @Published private(set) var lastCommand: TrackingCommand?
+    @Published private(set) var cameraFramesSent = 0
     @Published var serverURL: String {
         didSet { UserDefaults.standard.set(serverURL, forKey: Self.serverURLKey) }
     }
@@ -71,7 +72,7 @@ final class V13NetworkClient: ObservableObject {
         switch JSONDecoder().decodeSafely(TrackingCommand.self, from: data) {
         case .success(let command):
             guard command.type == "tracking" else {
-                logger.log(.error, "V1.3 JSON rejected: type must be 'tracking'.")
+                logger.log(.error, "V1.42 JSON rejected: type must be 'tracking'.")
                 await triggerTimeout(reason: "invalid message type")
                 return
             }
@@ -79,19 +80,29 @@ final class V13NetworkClient: ObservableObject {
             lastCommand = command
             logger.log(
                 .success,
-                String(format: "V1.3 JSON decoded: locked=%@ error=(%.3f, %.3f) confidence=%.2f.", String(command.targetLocked), command.errorX, command.errorY, command.confidence)
+                String(format: "V1.42 JSON decoded: locked=%@ error=(%.3f, %.3f) confidence=%.2f.", String(command.targetLocked), command.errorX, command.errorY, command.confidence)
             )
             await onCommand?(command)
             armTimeout()
         case .failure(let error):
-            logger.log(.error, "V1.3 JSON decode failed: \(error.localizedDescription)")
+            logger.log(.error, "V1.42 JSON decode failed: \(error.localizedDescription)")
             await triggerTimeout(reason: "JSON decode failure")
         }
     }
 
+    func sendCameraFrame(_ data: Data) async {
+        guard let socketTask, status != .offline, status != .failed else { return }
+        do {
+            try await socketTask.send(.data(data))
+            cameraFramesSent += 1
+        } catch {
+            logger.log(.error, "Camera frame send failed: \(error.localizedDescription)")
+        }
+    }
+
     func sendFakeCommand() async {
-        let json = #"{"type":"tracking","version":"1.3","target_locked":true,"target_id":7,"error_x":0.18,"error_y":-0.04,"confidence":0.91,"timestamp_ms":1781770000000}"#
-        logger.log(.info, "Injecting the MVP fake V1.3 JSON command.")
+        let json = #"{"type":"tracking","version":"1.0","source_version":"1.42","target_locked":true,"target_id":7,"error_x":0.18,"error_y":-0.04,"confidence":0.91,"timestamp_ms":1781770000000}"#
+        logger.log(.info, "Injecting a fake V1.42 JSON command.")
         await receive(data: Data(json.utf8))
     }
 
@@ -100,6 +111,7 @@ final class V13NetworkClient: ObservableObject {
         closeSocket()
         status = .offline
         lastCommand = nil
+        cameraFramesSent = 0
         logger.log(.warning, "AutoCamTracker client disconnected; requesting safety stop.")
         await onTimeout?()
     }
@@ -155,7 +167,7 @@ final class V13NetworkClient: ObservableObject {
             guard let self else { return }
             do {
                 try await Task.sleep(for: self.timeout)
-                await triggerTimeout(reason: "no V1.3 data for 500 ms")
+                await triggerTimeout(reason: "no V1.42 data for 500 ms")
             } catch {
                 return
             }
@@ -165,7 +177,7 @@ final class V13NetworkClient: ObservableObject {
     private func triggerTimeout(reason: String) async {
         timeoutTask?.cancel()
         status = .timedOut
-        logger.log(.warning, "V1.3 safety timeout: \(reason).")
+        logger.log(.warning, "V1.42 safety timeout: \(reason).")
         await onTimeout?()
     }
 }

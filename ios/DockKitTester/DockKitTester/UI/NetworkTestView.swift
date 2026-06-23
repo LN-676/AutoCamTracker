@@ -7,7 +7,7 @@ struct NetworkTestView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("AutoCamTracker V1.41")
+                Text("AutoCamTracker V1.42")
                     .font(.headline)
                 Spacer()
                 Text(client.status.rawValue)
@@ -45,6 +45,9 @@ struct NetworkTestView: View {
                 )
                 .font(.system(.caption, design: .monospaced))
             }
+
+            Text("Camera frames sent: \(client.cameraFramesSent)")
+                .font(.system(.caption, design: .monospaced))
 
             Button("Inject Local Fake JSON") {
                 Task { await client.sendFakeCommand() }

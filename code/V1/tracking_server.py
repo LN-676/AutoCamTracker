@@ -1,11 +1,14 @@
-"""WebSocket bridge from AutoCamTracker V1.41 to the DockKit iOS app."""
+"""WebSocket bridge from AutoCamTracker V1.42 to the DockKit iOS app."""
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
 import json
+import ipaddress
+import re
 import socket
+import subprocess
 import threading
 from time import monotonic, time
 from typing import Any, Callable
@@ -33,7 +36,7 @@ def tracking_message(
     return {
         "type": "tracking",
         "version": "1.0",
-        "source_version": "1.41",
+        "source_version": "1.42",
         "sequence": sequence,
         "target_locked": bool(target_locked),
         "target_id": target_id,
@@ -45,7 +48,7 @@ def tracking_message(
 
 
 def frame_tracking_message(frame_data, frame_shape, sequence: int = 0) -> dict[str, Any]:
-    """Convert V1.41 pixel-space framing status into normalized gimbal error."""
+    """Convert V1.42 pixel-space framing status into normalized gimbal error."""
 
     frame_h, frame_w = frame_shape[:2]
     targets = frame_data.selected_targets
@@ -82,6 +85,9 @@ class TrackingWebSocketServer:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop_event: asyncio.Event | None = None
         self._clients: set[Any] = set()
+        self._frame_lock = threading.Lock()
+        self._latest_frame_bytes: bytes | None = None
+        self._received_frame_count = 0
         self._sequence = 0
         self._last_publish_at = 0.0
         self._running = threading.Event()
@@ -96,20 +102,71 @@ class TrackingWebSocketServer:
 
     @property
     def local_urls(self) -> list[str]:
-        addresses: set[str] = {"127.0.0.1"}
+        interface_addresses = self._active_interface_addresses()
+        addresses: set[str] = {address for _, address in interface_addresses}
         hostname = socket.gethostname()
         local_name = hostname if hostname.endswith(".local") else f"{hostname}.local"
         try:
             addresses.update(socket.gethostbyname_ex(hostname)[2])
         except OSError:
             pass
-        urls = [f"ws://{local_name}:{self.config.port}{self.config.path}"]
-        urls.extend(
-            f"ws://{address}:{self.config.port}{self.config.path}"
-            for address in sorted(addresses)
-            if ":" not in address and not address.startswith("127.")
+        usable = [address for address in addresses if ":" not in address and not address.startswith("127.")]
+        link_local = sorted(address for address in usable if ipaddress.ip_address(address).is_link_local)
+        private = sorted(
+            address
+            for address in usable
+            if ipaddress.ip_address(address).is_private and address not in link_local
         )
+        other = sorted(address for address in usable if address not in link_local and address not in private)
+        urls = [
+            f"ws://{address}:{self.config.port}{self.config.path}"
+            for address in (*link_local, *private, *other)
+        ]
+        urls.append(f"ws://{local_name}:{self.config.port}{self.config.path}")
         return urls
+
+    @property
+    def preferred_url(self) -> str:
+        return self.local_urls[0]
+
+    @staticmethod
+    def _active_interface_addresses() -> list[tuple[str, str]]:
+        """Return active macOS IPv4 interfaces, including USB link-local addresses."""
+
+        try:
+            result = subprocess.run(
+                ["ifconfig"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return []
+
+        interfaces: dict[str, dict[str, Any]] = {}
+        current: str | None = None
+        for line in result.stdout.splitlines():
+            match = re.match(r"^([a-zA-Z0-9]+):", line)
+            if match:
+                current = match.group(1)
+                interfaces[current] = {"addresses": [], "active": False}
+                continue
+            if current is None:
+                continue
+            address_match = re.match(r"\s+inet (\d+\.\d+\.\d+\.\d+)\b", line)
+            if address_match:
+                interfaces[current]["addresses"].append(address_match.group(1))
+            if line.strip() == "status: active":
+                interfaces[current]["active"] = True
+
+        return [
+            (name, address)
+            for name, state in interfaces.items()
+            if state["active"]
+            for address in state["addresses"]
+            if not address.startswith("127.")
+        ]
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -152,6 +209,21 @@ class TrackingWebSocketServer:
         self._sequence += 1
         self.publish(tracking_message(target_locked=False, sequence=self._sequence))
 
+    def read_latest_frame(self):
+        """Decode and consume only the newest iPhone JPEG frame."""
+
+        with self._frame_lock:
+            data = self._latest_frame_bytes
+            self._latest_frame_bytes = None
+        if data is None:
+            return None
+
+        import cv2
+        import numpy as np
+
+        encoded = np.frombuffer(data, dtype=np.uint8)
+        return cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+
     def publish(self, payload: dict[str, Any]) -> None:
         loop = self._loop
         if loop is None or not loop.is_running():
@@ -178,12 +250,14 @@ class TrackingWebSocketServer:
         self._stop_event = asyncio.Event()
         async with serve(self._handle_client, self.config.host, self.config.port):
             self._running.set()
-            self._notify(f"Waiting for iPhone: {self.local_urls[0]}")
+            self._notify("Waiting for iPhone")
             await self._stop_event.wait()
 
         self._clients.clear()
 
     async def _handle_client(self, websocket) -> None:
+        from websockets.exceptions import ConnectionClosed
+
         request_path = getattr(getattr(websocket, "request", None), "path", "")
         if request_path.split("?", 1)[0] != self.config.path:
             await websocket.close(code=1008, reason="Unsupported path")
@@ -193,8 +267,11 @@ class TrackingWebSocketServer:
         self._notify(f"iPhone connected ({len(self._clients)})")
         await websocket.send(json.dumps(tracking_message(target_locked=False, sequence=self._sequence)))
         try:
-            async for _message in websocket:
-                pass
+            async for message in websocket:
+                if isinstance(message, bytes):
+                    self._accept_camera_frame(message)
+        except ConnectionClosed:
+            pass
         finally:
             self._clients.discard(websocket)
             self._notify("iPhone disconnected" if not self._clients else f"iPhone connected ({len(self._clients)})")
@@ -208,6 +285,16 @@ class TrackingWebSocketServer:
         for client, result in zip(clients, results):
             if isinstance(result, Exception):
                 self._clients.discard(client)
+
+    def _accept_camera_frame(self, data: bytes) -> None:
+        if len(data) < 4 or len(data) > 2_000_000 or not data.startswith(b"\xff\xd8"):
+            return
+        with self._frame_lock:
+            self._latest_frame_bytes = data
+            self._received_frame_count += 1
+            first_frame = self._received_frame_count == 1
+        if first_frame:
+            self._notify("iPhone video receiving")
 
     def _notify(self, message: str) -> None:
         if self.on_status is not None:
