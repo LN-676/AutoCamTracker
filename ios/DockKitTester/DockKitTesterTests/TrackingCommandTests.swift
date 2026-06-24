@@ -4,13 +4,13 @@ import XCTest
 
 final class TrackingCommandTests: XCTestCase {
     func testDecodesV143SnakeCasePayload() throws {
-        let json = #"{"type":"tracking","version":"1.0","source_version":"1.5","sequence":42,"target_locked":true,"target_id":7,"error_x":0.18,"error_y":-0.04,"confidence":0.91,"timestamp_ms":1781770000000}"#
+        let json = #"{"type":"tracking","version":"1.0","source_version":"1.6","sequence":42,"target_locked":true,"target_id":7,"error_x":0.18,"error_y":-0.04,"confidence":0.91,"timestamp_ms":1781770000000}"#
 
         let command = try JSONDecoder().decode(TrackingCommand.self, from: Data(json.utf8))
 
         XCTAssertEqual(command.type, "tracking")
         XCTAssertEqual(command.version, "1.0")
-        XCTAssertEqual(command.sourceVersion, "1.5")
+        XCTAssertEqual(command.sourceVersion, "1.6")
         XCTAssertEqual(command.sequence, 42)
         XCTAssertTrue(command.targetLocked)
         XCTAssertEqual(command.targetId, 7)

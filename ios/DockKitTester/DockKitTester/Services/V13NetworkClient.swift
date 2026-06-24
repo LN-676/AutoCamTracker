@@ -74,12 +74,12 @@ final class V13NetworkClient: ObservableObject {
         switch JSONDecoder().decodeSafely(TrackingCommand.self, from: data) {
         case .success(let command):
             guard command.type == "tracking" else {
-                logger.log(.error, "V1.5 JSON rejected: type must be 'tracking'.")
+                logger.log(.error, "V1.6 JSON rejected: type must be 'tracking'.")
                 await triggerTimeout(reason: "invalid message type")
                 return
             }
             guard sequenceValidator.accept(command) else {
-                logger.log(.error, "V1.5 JSON rejected: duplicate or out-of-order sequence.")
+                logger.log(.error, "V1.6 JSON rejected: duplicate or out-of-order sequence.")
                 await triggerTimeout(reason: "stale tracking command")
                 return
             }
@@ -87,12 +87,12 @@ final class V13NetworkClient: ObservableObject {
             lastCommand = command
             logger.log(
                 .success,
-                String(format: "V1.5 JSON decoded: locked=%@ error=(%.3f, %.3f) confidence=%.2f.", String(command.targetLocked), command.errorX, command.errorY, command.confidence)
+                String(format: "V1.6 JSON decoded: locked=%@ error=(%.3f, %.3f) confidence=%.2f.", String(command.targetLocked), command.errorX, command.errorY, command.confidence)
             )
             await onCommand?(command)
             armTimeout()
         case .failure(let error):
-            logger.log(.error, "V1.5 JSON decode failed: \(error.localizedDescription)")
+            logger.log(.error, "V1.6 JSON decode failed: \(error.localizedDescription)")
             await triggerTimeout(reason: "JSON decode failure")
         }
     }
@@ -108,8 +108,8 @@ final class V13NetworkClient: ObservableObject {
     }
 
     func sendFakeCommand() async {
-        let json = #"{"type":"tracking","version":"1.0","source_version":"1.5","target_locked":true,"target_id":7,"error_x":0.18,"error_y":-0.04,"confidence":0.91,"timestamp_ms":1781770000000}"#
-        logger.log(.info, "Injecting a fake V1.5 JSON command.")
+        let json = #"{"type":"tracking","version":"1.0","source_version":"1.6","target_locked":true,"target_id":7,"error_x":0.18,"error_y":-0.04,"confidence":0.91,"timestamp_ms":1781770000000}"#
+        logger.log(.info, "Injecting a fake V1.6 JSON command.")
         await receive(data: Data(json.utf8))
     }
 
@@ -175,7 +175,7 @@ final class V13NetworkClient: ObservableObject {
             guard let self else { return }
             do {
                 try await Task.sleep(for: self.timeout)
-                await triggerTimeout(reason: "no V1.5 data for 500 ms")
+                await triggerTimeout(reason: "no V1.6 data for 500 ms")
             } catch {
                 return
             }
@@ -185,7 +185,7 @@ final class V13NetworkClient: ObservableObject {
     private func triggerTimeout(reason: String) async {
         timeoutTask?.cancel()
         status = .timedOut
-        logger.log(.warning, "V1.5 safety timeout: \(reason).")
+        logger.log(.warning, "V1.6 safety timeout: \(reason).")
         await onTimeout?()
     }
 }

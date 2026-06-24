@@ -20,8 +20,10 @@ enum CameraStreamOrientation: String, CaseIterable, Identifiable {
     var imageOrientation: CGImagePropertyOrientation {
         switch self {
         case .portrait: .right
-        case .landscapeLeft: .down
-        case .landscapeRight: .up
+        // UIDevice reports the physical rotation, while Core Image describes
+        // the transform needed to display the rear-camera sensor upright.
+        case .landscapeLeft: .up
+        case .landscapeRight: .down
         }
     }
 }

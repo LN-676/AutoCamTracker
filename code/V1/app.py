@@ -62,7 +62,7 @@ except ImportError:  # pragma: no cover
 
 @dataclass
 class AppConfig:
-    window_title: str = "AutoCamTracker V1.5"
+    window_title: str = "AutoCamTracker V1.6"
     update_interval_ms: int = 15
     output_width: int = 640
     output_height: int = 360
@@ -150,6 +150,7 @@ class AutoCamTrackerApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.refresh_model_options()
         self.refresh_reid_model_options()
+        self.root.after_idle(self.on_source_selected)
 
     def _build_ui(self) -> None:
         style = ttk.Style(self.root)
@@ -179,7 +180,7 @@ class AutoCamTrackerApp:
         controls.columnconfigure(1, weight=1, minsize=250)
         controls.columnconfigure(2, weight=1, minsize=180)
 
-        self.source_var = tk.StringVar(value="webcam")
+        self.source_var = tk.StringVar(value="iphone")
         self.tracker_var = tk.StringVar(value="botsort")
         self.framing_var = tk.StringVar(value="medium")
         self.model_var = tk.StringVar(value=self.config.default_model)
@@ -256,6 +257,7 @@ class AutoCamTrackerApp:
             state="readonly",
         )
         self.model_box.grid(row=0, column=1, padx=4, sticky="ew")
+        self.model_box.bind("<<ComboboxSelected>>", self.on_tracking_configuration_changed)
         ttk.Button(tracking_controls, text="Refresh", command=self.refresh_model_options).grid(row=0, column=2, sticky="ew", padx=4)
 
         ttk.Label(tracking_controls, text="Tracker").grid(row=1, column=0, sticky="w", padx=4, pady=(6, 0))
@@ -267,6 +269,7 @@ class AutoCamTrackerApp:
             state="readonly",
         )
         self.tracker_box.grid(row=1, column=1, sticky="ew", padx=4, pady=(6, 0))
+        self.tracker_box.bind("<<ComboboxSelected>>", self.on_tracking_configuration_changed)
 
         ttk.Label(tracking_controls, text="Framing").grid(row=1, column=2, sticky="w", padx=(10, 2), pady=(6, 0))
         self.framing_box = ttk.Combobox(
@@ -281,6 +284,19 @@ class AutoCamTrackerApp:
         ttk.Button(tracking_controls, text="Auto Track", command=self.auto_select_one).grid(row=2, column=0, columnspan=2, sticky="ew", padx=4, pady=(7, 0))
         ttk.Button(tracking_controls, text="Clear", command=self.clear_selection).grid(row=2, column=2, sticky="ew", padx=4, pady=(7, 0))
         ttk.Button(tracking_controls, text="Reset", command=self.reset_tracking).grid(row=2, column=3, sticky="ew", padx=4, pady=(7, 0))
+        ttk.Label(tracking_controls, text="ReID Model").grid(row=3, column=0, sticky="w", padx=4, pady=(7, 0))
+        self.reid_model_box = ttk.Combobox(
+            tracking_controls,
+            textvariable=self.reid_model_var,
+            values=[],
+            width=18,
+            state="readonly",
+        )
+        self.reid_model_box.grid(row=3, column=1, columnspan=2, sticky="ew", padx=4, pady=(7, 0))
+        self.reid_model_box.bind("<<ComboboxSelected>>", lambda _: self.apply_reid_model_config())
+        ttk.Button(tracking_controls, text="Refresh ReID", command=self.refresh_reid_model_options).grid(
+            row=3, column=3, sticky="ew", padx=4, pady=(7, 0)
+        )
         tracking_controls.columnconfigure(1, weight=1)
         tracking_controls.columnconfigure(3, weight=1)
 
@@ -429,19 +445,6 @@ class AutoCamTrackerApp:
         )
         feature_mode_box.grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=(5, 0))
         feature_mode_box.bind("<<ComboboxSelected>>", self.apply_auto_feature_mode)
-        ttk.Label(self.identity_advanced_frame, text="ReID Model").grid(row=2, column=0, sticky="w", pady=(5, 0))
-        self.reid_model_box = ttk.Combobox(
-            self.identity_advanced_frame,
-            textvariable=self.reid_model_var,
-            values=[],
-            width=18,
-            state="readonly",
-        )
-        self.reid_model_box.grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=(5, 0))
-        self.reid_model_box.bind("<<ComboboxSelected>>", lambda _: self.apply_reid_model_config())
-        ttk.Button(self.identity_advanced_frame, text="Refresh Models", command=self.refresh_reid_model_options).grid(
-            row=3, column=0, columnspan=2, sticky="ew", pady=(5, 0)
-        )
         ttk.Label(identity_controls, textvariable=self.identity_mode_var, wraplength=390).grid(
             row=7,
             column=0,
@@ -670,9 +673,18 @@ class AutoCamTrackerApp:
             self.video_path_var.set(f"Video: {self._short_label(Path(path).name)}")
 
     def on_source_selected(self, _event=None) -> None:
+        if self.detector is not None:
+            self.stop()
         self._update_source_controls()
         if self.source_var.get() == "iphone":
             self._start_iphone_link()
+            self.root.after_idle(self.start)
+
+    def on_tracking_configuration_changed(self, _event=None) -> None:
+        if self.detector is not None:
+            self.stop()
+        self.apply_ui_config()
+        self.status_var.set("Status: tracking configuration changed; press Start")
 
     def _update_source_controls(self) -> None:
         if not hasattr(self, "browse_video_button"):
@@ -1775,10 +1787,9 @@ class AutoCamTrackerApp:
             self._set_button_enabled(self.pause_button, False)
             self._set_button_enabled(self.stop_button, False)
 
-        configuration_state = "disabled" if has_source else "readonly"
-        self.source_box.configure(state=configuration_state)
-        self.model_box.configure(state=configuration_state)
-        self.tracker_box.configure(state=configuration_state)
+        self.source_box.configure(state="readonly")
+        self.model_box.configure(state="readonly")
+        self.tracker_box.configure(state="readonly")
 
     def _fit_size_to_source_aspect(self, width_limit: int, height_limit: int) -> tuple[int, int]:
         if self.last_frame_shape is not None:

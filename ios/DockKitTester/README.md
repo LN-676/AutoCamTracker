@@ -1,4 +1,4 @@
-# AutoCamTracker V1.5 Camera (iOS)
+# AutoCamTracker V1.6 Camera (iOS)
 
 這是 AutoCamTracker 的獨立 iOS 測試工具，用來驗證自製 App 能否透過 Apple DockKit 手動控制 Insta360 Flow 2 Pro。它不是完整相機 App，也不使用 Insta360 私有 SDK。
 
@@ -11,8 +11,8 @@
 - `limits`、內建點頭動畫、相對角度與 `setAngularVelocity` 分階段能力診斷。
 - `setAngularVelocity` 短測試與 `setOrientation` 回正；回正失敗時自動 STOP。
 - 成功、失敗、完整 error 描述的 100 筆 UI log，可複製。
-- V1.5 `TrackingCommand` JSON parser、dead zone、速度上限、smoothing。
-- 真實 WebSocket Client、V1.5 URL 輸入、自動重連、JPEG 相機串流與 500 ms timeout STOP。
+- V1.6 `TrackingCommand` JSON parser、dead zone、速度上限、smoothing。
+- 真實 WebSocket Client、V1.6 URL 輸入、自動連線／重連、15 FPS JPEG 相機串流與 500 ms timeout STOP。
 - 分頁式相機、雲台、連線與紀錄介面，支援點按對焦、變焦及直橫自動旋轉。
 - DockKit System Tracking 會自動保持關閉，人物辨識與追蹤交由電腦端處理。
 - App 進入背景、target lost、訊息錯誤或 timeout 時安全停止。
@@ -54,15 +54,15 @@ Apple 的軸向定義是 `Vector3D(x: pitch, y: yaw, z: roll)`；本專案依官
 8. 按 `Test Angular Velocity`：App 會以 yaw `+0.15 rad/s` 執行 350 ms 後停止。
 9. 按 `Recenter` 或 `Test Orientation`，確認雲台回到絕對零點；不支援時 log 會顯示錯誤並執行 STOP fallback。
 10. 按 `Run Capability Diagnostics`，依序驗證 limits、點頭動畫、相對角度與角速度；測試區域需保持淨空。
-11. 按 `Inject Fake JSON`，確認 V1.5 資料可解碼、控制迴路有輸出，500 ms 後自動停止。
+11. 按 `Inject Fake JSON`，確認 V1.6 資料可解碼、控制迴路有輸出，500 ms 後自動停止。
 12. 複製 API Log 保存結果。判斷相容性的關鍵是 `Manual Mode ready` 與各能力測試是否成功。
 
-## 連接 AutoCamTracker V1.5
+## 連接 AutoCamTracker V1.6
 
-1. Mac 的 V1.5 選擇 `iphone`，等待畫面顯示 WebSocket URL。
+1. Mac 的 V1.6 預設選擇 `iphone`，並自動啟動 WebSocket 與影像管線。
 2. iPhone 與 Mac 使用同一 Wi-Fi，或先以 USB-C 建立 Personal Hotspot USB / USB Ethernet IP 網路。
-3. App 的 `AutoCamTracker V1.5` 區輸入 Mac 顯示的完整 URL，例如 `ws://MacBook.local:8765/ws/tracking`，再按 `Connect`。
-4. V1.5 顯示 `iPhone connected` 後會接收相機影像；iOS App 會自動關閉 DockKit System Tracking。
+3. App 的 `AutoCamTracker V1.6` 區會使用保存的 URL 自動連線；需要更換時可輸入 Mac 顯示的完整 URL，例如 `ws://MacBook.local:8765/ws/tracking`，再按 `Connect`。
+4. V1.6 顯示 `iPhone connected` 後會接收相機影像；iOS App 會自動關閉 DockKit System Tracking。
 5. 任何無效訊息、target lost、斷線或超過 500 ms 沒有 tracking command 都會執行 STOP。
 
 USB-C 在這一階段是「USB 上的 IP 網路」，不是自訂 raw USB protocol；因此無線和有線共用完全相同的 WebSocket URL 與 JSON 格式。單純使用 USB 安裝 App 不等於已建立 WebSocket 網路。

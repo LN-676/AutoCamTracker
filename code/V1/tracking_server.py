@@ -1,4 +1,4 @@
-"""WebSocket bridge from AutoCamTracker V1.5 to the DockKit iOS app."""
+"""WebSocket bridge from AutoCamTracker V1.6 to the DockKit iOS app."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def tracking_message(
     return {
         "type": "tracking",
         "version": "1.0",
-        "source_version": "1.5",
+        "source_version": "1.6",
         "sequence": sequence,
         "target_locked": bool(target_locked),
         "target_id": target_id,
@@ -48,7 +48,7 @@ def tracking_message(
 
 
 def frame_tracking_message(frame_data, frame_shape, sequence: int = 0) -> dict[str, Any]:
-    """Convert V1.5 pixel-space framing status into normalized gimbal error."""
+    """Convert V1.6 pixel-space framing status into normalized gimbal error."""
 
     frame_h, frame_w = frame_shape[:2]
     targets = frame_data.selected_targets
@@ -124,9 +124,12 @@ class TrackingWebSocketServer:
             if ipaddress.ip_address(address).is_private and address not in link_local
         )
         other = sorted(address for address in usable if address not in link_local and address not in private)
+        # Prefer the normal LAN address. A 169.254 link-local address may be
+        # present whenever an iPhone is attached by USB, but it is not always
+        # routable from the app and previously became the misleading default.
         urls = [
             f"ws://{address}:{self.config.port}{self.config.path}"
-            for address in (*link_local, *private, *other)
+            for address in (*private, *link_local, *other)
         ]
         urls.append(f"ws://{local_name}:{self.config.port}{self.config.path}")
         return urls

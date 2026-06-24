@@ -73,7 +73,7 @@ class TrackingMessageTests(unittest.TestCase):
         self.assertEqual(message["error_x"], 1.0)
         self.assertEqual(message["error_y"], -1.0)
         self.assertEqual(message["confidence"], 1.0)
-        self.assertEqual(message["source_version"], "1.5")
+        self.assertEqual(message["source_version"], "1.6")
 
     def test_server_round_trip(self) -> None:
         with socket.socket() as probe:

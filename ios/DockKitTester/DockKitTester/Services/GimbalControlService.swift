@@ -43,8 +43,8 @@ final class GimbalControlService: ObservableObject {
 
     func apply(_ trackingCommand: TrackingCommand) async {
         guard trackingCommand.type == "tracking" else {
-            logger.log(.error, "Ignored V1.5 message with unsupported type: \(trackingCommand.type).")
-            await emergencyStop(reason: "invalid V1.5 message")
+            logger.log(.error, "Ignored V1.6 message with unsupported type: \(trackingCommand.type).")
+            await emergencyStop(reason: "invalid V1.6 message")
             return
         }
 
