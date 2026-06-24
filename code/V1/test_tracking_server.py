@@ -1,5 +1,6 @@
 import asyncio
 import json
+import socket
 from types import SimpleNamespace
 from time import monotonic, sleep
 import unittest
@@ -75,9 +76,12 @@ class TrackingMessageTests(unittest.TestCase):
         self.assertEqual(message["source_version"], "1.5")
 
     def test_server_round_trip(self) -> None:
-        server = TrackingWebSocketServer(TrackingServerConfig(host="127.0.0.1", port=18765))
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = int(probe.getsockname()[1])
+        server = TrackingWebSocketServer(TrackingServerConfig(host="127.0.0.1", port=port))
         server.start()
-        deadline = monotonic() + 2.0
+        deadline = monotonic() + 5.0
         while not server.is_running and monotonic() < deadline:
             sleep(0.01)
         self.assertTrue(server.is_running)
@@ -96,7 +100,7 @@ class TrackingMessageTests(unittest.TestCase):
         import cv2
         import numpy as np
 
-        async with connect("ws://127.0.0.1:18765/ws/tracking") as websocket:
+        async with connect(f"ws://127.0.0.1:{server.config.port}/ws/tracking") as websocket:
             initial = json.loads(await asyncio.wait_for(websocket.recv(), timeout=2.0))
             server.publish_test_pulse()
             pulse = json.loads(await asyncio.wait_for(websocket.recv(), timeout=2.0))

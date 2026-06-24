@@ -41,6 +41,7 @@ try:
     from reframer import FramingConfig, Reframer
     from scene_cut import SceneCutDetector
     from tracking_server import TrackingWebSocketServer
+    from track_shot_plan import TrackShotController, TrackZone
     from vehicle_identity_store import VehicleIdentityStore
 except ImportError:  # pragma: no cover
     from .auto_feature_sampler import AutoFeatureMode, AutoFeatureSampler
@@ -55,6 +56,7 @@ except ImportError:  # pragma: no cover
     from .reframer import FramingConfig, Reframer
     from .scene_cut import SceneCutDetector
     from .tracking_server import TrackingWebSocketServer
+    from .track_shot_plan import TrackShotController, TrackZone
     from .vehicle_identity_store import VehicleIdentityStore
 
 
@@ -109,6 +111,7 @@ class AutoCamTrackerApp:
         )
         self.iphone_status_queue: SimpleQueue[str] = SimpleQueue()
         self.tracking_server = TrackingWebSocketServer(on_status=self._queue_iphone_status)
+        self.track_shot_controller = TrackShotController()
 
         self.running = False
         self.recording = False
@@ -197,6 +200,10 @@ class AutoCamTrackerApp:
         self.advanced_identity_visible = tk.BooleanVar(value=False)
         self.timeline_var = tk.DoubleVar(value=0.0)
         self.timeline_label_var = tk.StringVar(value="00:00 / 00:00")
+        self.track_shot_mode_var = tk.StringVar(value=self.track_shot_controller.mode)
+        self.track_shot_state_var = tk.StringVar(value="Shot: AI Tracking · tracking")
+        self.in_zone_var = tk.StringVar(value=self.track_shot_controller.in_zone.text())
+        self.out_zone_var = tk.StringVar(value=self.track_shot_controller.out_zone.text())
 
         ttk.Label(source_controls, text="Input").grid(row=0, column=0, sticky="w", padx=4)
         self.source_box = ttk.Combobox(
@@ -276,6 +283,29 @@ class AutoCamTrackerApp:
         ttk.Button(tracking_controls, text="Reset", command=self.reset_tracking).grid(row=2, column=3, sticky="ew", padx=4, pady=(7, 0))
         tracking_controls.columnconfigure(1, weight=1)
         tracking_controls.columnconfigure(3, weight=1)
+
+        shot_controls = ttk.LabelFrame(controls, text="Track Shot", padding=5)
+        shot_controls.grid(row=1, column=0, columnspan=3, sticky="ew", padx=3, pady=2)
+        ttk.Label(shot_controls, text="Mode").grid(row=0, column=0, sticky="w", padx=4)
+        self.track_shot_mode_box = ttk.Combobox(
+            shot_controls,
+            textvariable=self.track_shot_mode_var,
+            values=["AI Tracking", "Fixed Cut", "In/Out Auto"],
+            state="readonly",
+            width=14,
+        )
+        self.track_shot_mode_box.grid(row=0, column=1, sticky="ew", padx=4)
+        self.track_shot_mode_box.bind("<<ComboboxSelected>>", self.apply_track_shot_config)
+        ttk.Label(shot_controls, text="In zone").grid(row=0, column=2, sticky="w", padx=(12, 2))
+        ttk.Entry(shot_controls, textvariable=self.in_zone_var, width=23).grid(row=0, column=3, sticky="ew", padx=4)
+        ttk.Label(shot_controls, text="Out zone").grid(row=0, column=4, sticky="w", padx=(12, 2))
+        ttk.Entry(shot_controls, textvariable=self.out_zone_var, width=23).grid(row=0, column=5, sticky="ew", padx=4)
+        ttk.Button(shot_controls, text="Apply", command=self.apply_track_shot_config).grid(row=0, column=6, padx=4)
+        ttk.Button(shot_controls, text="Rearm", command=self.rearm_track_shot).grid(row=0, column=7, padx=4)
+        ttk.Label(shot_controls, textvariable=self.track_shot_state_var).grid(row=0, column=8, sticky="w", padx=(10, 4))
+        shot_controls.columnconfigure(1, weight=1)
+        shot_controls.columnconfigure(3, weight=1)
+        shot_controls.columnconfigure(5, weight=1)
 
         self.start_button = ttk.Button(playback_controls, text="Start", command=self.start)
         self.start_button.grid(row=0, column=0, sticky="ew", padx=4, pady=4)
@@ -467,6 +497,31 @@ class AutoCamTrackerApp:
     def apply_ui_config(self) -> None:
         self.input_config = self._ui_input_config()
         self.reframer.set_framing_mode(self.framing_var.get())
+
+    def apply_track_shot_config(self, _event=None) -> str:
+        try:
+            in_zone = TrackZone.parse(self.in_zone_var.get())
+            out_zone = TrackZone.parse(self.out_zone_var.get())
+            self.track_shot_controller.configure_zones(in_zone, out_zone)
+            self.track_shot_controller.set_mode(self.track_shot_mode_var.get())
+        except ValueError as exc:
+            messagebox.showerror("Track Shot", str(exc))
+            return "break"
+        self.in_zone_var.set(in_zone.text())
+        self.out_zone_var.set(out_zone.text())
+        self.track_shot_state_var.set(
+            f"Shot: {self.track_shot_controller.mode} · {self.track_shot_controller.state}"
+        )
+        if self.track_shot_controller.mode == "Fixed Cut":
+            self.tracking_server.publish_stop()
+        return "break"
+
+    def rearm_track_shot(self) -> None:
+        self.track_shot_controller.rearm()
+        self.track_shot_state_var.set(
+            f"Shot: {self.track_shot_controller.mode} · {self.track_shot_controller.state}"
+        )
+        self.tracking_server.publish_stop()
 
     def apply_reid_model_config(self) -> None:
         model_path = self.reid_model_options.get(
@@ -1023,7 +1078,14 @@ class AutoCamTrackerApp:
             self._stop_auto_feature_capture_for_scene_change()
         self._update_images(frame_data.before_frame, frame_data.after_frame)
         self.current_frame_data = frame_data
-        self.tracking_server.publish_frame(frame_data, frame.shape)
+        shot_decision = self.track_shot_controller.evaluate(frame_data, frame.shape)
+        self.track_shot_state_var.set(
+            f"Shot: {self.track_shot_controller.mode} · {shot_decision.state} · {shot_decision.reason}"
+        )
+        if shot_decision.publish_tracking:
+            self.tracking_server.publish_frame(frame_data, frame.shape)
+        else:
+            self.tracking_server.publish_stop()
         self._run_auto_feature_sampling(frame)
         self.refresh_identity_db_panel(force=False)
         return frame_data
