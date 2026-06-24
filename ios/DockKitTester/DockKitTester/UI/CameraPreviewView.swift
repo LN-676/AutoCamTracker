@@ -48,8 +48,11 @@ final class PreviewView: UIView {
         switch orientation {
         case .portrait: angle = 90
         case .portraitUpsideDown: angle = 270
-        case .landscapeLeft: angle = 0
-        case .landscapeRight: angle = 180
+        // The rear camera sensor's zero-degree orientation is landscape right.
+        // UIInterfaceOrientation names the direction of the interface, so the
+        // two landscape angles are the reverse of UIDevice's physical naming.
+        case .landscapeLeft: angle = 180
+        case .landscapeRight: angle = 0
         default: return
         }
         if connection.isVideoRotationAngleSupported(angle) {
