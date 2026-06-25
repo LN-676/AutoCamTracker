@@ -96,14 +96,19 @@ final class V13NetworkClient: ObservableObject {
                 await triggerTimeout(reason: "stale tracking command")
                 return
             }
-            status = .receiving
             lastCommand = command
             logger.log(
                 .success,
                 String(format: "V1.6 JSON decoded: locked=%@ error=(%.3f, %.3f) confidence=%.2f.", String(command.targetLocked), command.errorX, command.errorY, command.confidence)
             )
             await onCommand?(command)
-            armTimeout()
+            if command.targetLocked {
+                status = .receiving
+                armTimeout()
+            } else {
+                timeoutTask?.cancel()
+                status = .connected
+            }
         case .failure(let error):
             logger.log(.error, "V1.6 JSON decode failed: \(error.localizedDescription)")
             await triggerTimeout(reason: "JSON decode failure")
@@ -114,6 +119,9 @@ final class V13NetworkClient: ObservableObject {
         switch JSONDecoder().decodeSafely(DesktopState.self, from: data) {
         case .success(let state):
             desktopState = state
+            if status == .timedOut {
+                status = .connected
+            }
             logger.log(
                 .info,
                 "Desktop state updated: source=\(state.source), motor=\(state.motor.armed ? "armed" : "off"), gids=\(state.gids.count)."
