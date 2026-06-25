@@ -29,27 +29,41 @@ class ReIDEmbeddingExtractor:
             self._load()
 
     def extract(self, frame, bbox: tuple[float, float, float, float]) -> list[float] | None:
-        if not self.available or self.encoder is None:
+        batch_features = self.extract_batch(frame, [bbox])
+        return batch_features[0] if batch_features else None
+
+    def extract_batch(self, frame, bboxes: list[tuple[float, float, float, float]]) -> list[list[float]] | None:
+        if not self.available or self.encoder is None or not bboxes:
             return None
         import numpy as np
 
-        x1, y1, x2, y2 = bbox
-        width = max(1.0, x2 - x1)
-        height = max(1.0, y2 - y1)
-        dets = np.array([[(x1 + x2) / 2.0, (y1 + y2) / 2.0, width, height]], dtype=np.float32)
+        dets_list = []
+        for bbox in bboxes:
+            x1, y1, x2, y2 = bbox
+            width = max(1.0, x2 - x1)
+            height = max(1.0, y2 - y1)
+            dets_list.append([(x1 + x2) / 2.0, (y1 + y2) / 2.0, width, height])
+
+        dets = np.array(dets_list, dtype=np.float32)
         try:
             features = self.encoder(frame, dets)
         except Exception as exc:
             self.available = False
             self.error = str(exc)
             return None
+            
         if not features:
             return None
-        feature = np.asarray(features[0], dtype=np.float32).reshape(-1)
-        norm = float(np.linalg.norm(feature))
-        if norm <= 1e-12:
-            return None
-        return (feature / norm).astype("float32").tolist()
+            
+        result = []
+        for feature in features:
+            feat = np.asarray(feature, dtype=np.float32).reshape(-1)
+            norm = float(np.linalg.norm(feat))
+            if norm <= 1e-12:
+                result.append([])
+            else:
+                result.append((feat / norm).astype("float32").tolist())
+        return result
 
     def _load(self) -> None:
         try:

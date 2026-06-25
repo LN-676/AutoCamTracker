@@ -59,7 +59,7 @@ class VehicleIdentityStore:
     def __init__(self, db_path: Path | str, commit_interval_seconds: float = 0.5) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(self.db_path)
+        self.connection = sqlite3.connect(self.db_path, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self.commit_interval_seconds = max(0.0, float(commit_interval_seconds))
         self._last_commit_at = time()

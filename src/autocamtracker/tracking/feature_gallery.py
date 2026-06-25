@@ -137,7 +137,7 @@ class FeatureGallery:
     ) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(self.db_path)
+        self.connection = sqlite3.connect(self.db_path, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self.reid_model_path = reid_model_path
         self.duplicate_threshold = duplicate_threshold
@@ -315,12 +315,19 @@ class FeatureGallery:
         if not self.has_master_features(vehicle_id):
             return []
 
-        ranked: list[DetectionFeatureMatch] = []
+        valid_detections = []
         for detection in detections:
             quality = self.assess_crop_quality(frame, detection.bbox)
-            if not quality.accepted:
-                continue
-            embedding = self._extract_embedding(frame, detection, use_runtime_cache=True)
+            if quality.accepted:
+                valid_detections.append(detection)
+
+        if not valid_detections:
+            return []
+
+        embeddings = self._extract_embedding_batch(frame, valid_detections, use_runtime_cache=True)
+        
+        ranked: list[DetectionFeatureMatch] = []
+        for detection, embedding in zip(valid_detections, embeddings):
             if embedding is None:
                 continue
             matches = self.match_top_k(
@@ -583,6 +590,64 @@ class FeatureGallery:
                 )
                 self._detection_embedding_cache.pop(oldest_track_id, None)
         return embedding
+
+    def _extract_embedding_batch(
+        self,
+        frame,
+        detections: list[TrackedDetection],
+        use_runtime_cache: bool = False,
+    ) -> list[list[float] | None]:
+        results: list[list[float] | None] = [None] * len(detections)
+        to_extract_indices = []
+        feature_bboxes = []
+
+        for i, detection in enumerate(detections):
+            track_id = detection.track_id
+            if use_runtime_cache and track_id is not None:
+                cached = self._detection_embedding_cache.get(track_id)
+                if (
+                    cached is not None
+                    and 0 <= detection.frame_index - cached.frame_index <= 4
+                    and self._bbox_iou(cached.bbox, detection.bbox) >= 0.5
+                ):
+                    results[i] = cached.embedding
+                    continue
+
+            to_extract_indices.append(i)
+            feature_bboxes.append(self._feature_bbox(frame, detection.bbox))
+
+        if to_extract_indices:
+            with self._embedding_lock:
+                if self.embedding_extractor is None:
+                    self.embedding_extractor = ReIDEmbeddingExtractor(
+                        ReIDEmbeddingConfig(model_path=self.reid_model_path)
+                    )
+                batch_embeddings = self.embedding_extractor.extract_batch(frame, feature_bboxes)
+
+            if batch_embeddings:
+                for idx, embedding in zip(to_extract_indices, batch_embeddings):
+                    if not embedding:
+                        continue
+                    results[idx] = embedding
+                    detection = detections[idx]
+                    track_id = detection.track_id
+                    if use_runtime_cache and track_id is not None:
+                        self._detection_embedding_cache[track_id] = _CachedDetectionEmbedding(
+                            embedding=embedding,
+                            frame_index=detection.frame_index,
+                            bbox=detection.bbox,
+                        )
+                
+                if use_runtime_cache and len(self._detection_embedding_cache) > 256:
+                    # Cleanup cache if it gets too large
+                    sorted_keys = sorted(
+                        self._detection_embedding_cache.keys(),
+                        key=lambda k: self._detection_embedding_cache[k].frame_index
+                    )
+                    for k in sorted_keys[:-256]:
+                        self._detection_embedding_cache.pop(k, None)
+
+        return results
 
     def _cached_gallery_features(
         self,
