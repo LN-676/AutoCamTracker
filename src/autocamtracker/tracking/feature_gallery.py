@@ -9,12 +9,8 @@ import sqlite3
 from time import time
 from typing import Any, Literal, Protocol
 
-try:
-    from reid_embedding import ReIDEmbeddingConfig, ReIDEmbeddingExtractor
-    from video_detector import TrackedDetection
-except ImportError:  # pragma: no cover
-    from .reid_embedding import ReIDEmbeddingConfig, ReIDEmbeddingExtractor
-    from .video_detector import TrackedDetection
+from autocamtracker.tracking.reid_embedding import ReIDEmbeddingConfig, ReIDEmbeddingExtractor
+from autocamtracker.vision.detector import TrackedDetection
 
 
 GalleryType = Literal["master", "pending", "candidate"]

@@ -10,16 +10,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-try:
-    from detection_store import VehicleCandidate
-    from reframer import FramingStatus
-    from target_tracker import SelectedTarget
-    from video_detector import TrackedDetection
-except ImportError:  # pragma: no cover
-    from .detection_store import VehicleCandidate
-    from .reframer import FramingStatus
-    from .target_tracker import SelectedTarget
-    from .video_detector import TrackedDetection
+from autocamtracker.tracking.detection_store import VehicleCandidate
+from autocamtracker.vision.reframer import FramingStatus
+from autocamtracker.tracking.target_tracker import SelectedTarget
+from autocamtracker.vision.detector import TrackedDetection
 
 
 @dataclass

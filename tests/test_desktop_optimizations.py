@@ -12,12 +12,12 @@ V1_DIR = Path(__file__).resolve().parent
 if str(V1_DIR) not in sys.path:
     sys.path.insert(0, str(V1_DIR))
 
-from desktop_state import IdentitySessionLinks
-from feature_gallery import FeatureGallery
-from identity_manager import GlobalIdentityManager
-from pipeline_worker import DetectionWorker
-from vehicle_identity_store import VehicleIdentityStore
-from video_detector import TrackedDetection
+from autocamtracker.core.desktop_state import IdentitySessionLinks
+from autocamtracker.tracking.feature_gallery import FeatureGallery
+from autocamtracker.tracking.identity_manager import GlobalIdentityManager
+from autocamtracker.core.pipeline_worker import DetectionWorker
+from autocamtracker.tracking.vehicle_identity_store import VehicleIdentityStore
+from autocamtracker.vision.detector import TrackedDetection
 
 
 def detection(track_id: int = 12, frame_index: int = 1) -> TrackedDetection:

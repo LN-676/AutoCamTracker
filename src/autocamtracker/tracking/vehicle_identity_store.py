@@ -9,10 +9,7 @@ import sqlite3
 from time import time
 from typing import Any
 
-try:
-    from video_detector import TrackedDetection
-except ImportError:  # pragma: no cover
-    from .video_detector import TrackedDetection
+from autocamtracker.vision.detector import TrackedDetection
 
 
 @dataclass

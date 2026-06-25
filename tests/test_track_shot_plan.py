@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 import unittest
 
-from track_shot_plan import TrackShotController, TrackZone
+from autocamtracker.core.track_shot_plan import TrackShotController, TrackZone
 
 
 def frame_data(center=(100.0, 180.0), fresh=True):

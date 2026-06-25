@@ -5,14 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-try:
-    from detection_store import DetectionStore
-    from feature_gallery import FeatureAddResult, FeatureGallery
-    from video_detector import TrackedDetection
-except ImportError:  # pragma: no cover
-    from .detection_store import DetectionStore
-    from .feature_gallery import FeatureAddResult, FeatureGallery
-    from .video_detector import TrackedDetection
+from autocamtracker.tracking.detection_store import DetectionStore
+from autocamtracker.tracking.feature_gallery import FeatureAddResult, FeatureGallery
+from autocamtracker.vision.detector import TrackedDetection
 
 
 AutoFeatureMode = Literal["Balanced", "Diverse", "Strict"]

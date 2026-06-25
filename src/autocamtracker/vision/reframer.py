@@ -13,10 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-try:
-    from target_tracker import SelectedTarget
-except ImportError:  # pragma: no cover
-    from .target_tracker import SelectedTarget
+from autocamtracker.tracking.target_tracker import SelectedTarget
 
 
 FramingMode = Literal["wide", "medium", "close"]

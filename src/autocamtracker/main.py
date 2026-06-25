@@ -28,36 +28,20 @@ except ImportError:  # pragma: no cover
     ImageGrab = None
     ImageTk = None
 
-try:
-    from auto_feature_sampler import AutoFeatureMode, AutoFeatureSampler
-    from video_detector import InputConfig, VideoDetector
-    from detection_store import DetectionStore
-    from desktop_state import IdentitySessionLinks
-    from feature_gallery import FeatureGallery
-    from frame_data import FrameData
-    from identity_manager import GlobalIdentityManager
-    from pipeline_processor import PipelineProcessor
-    from pipeline_worker import DetectionWorker
-    from reframer import FramingConfig, Reframer
-    from scene_cut import SceneCutDetector
-    from tracking_server import TrackingWebSocketServer
-    from track_shot_plan import TrackShotController, TrackZone
-    from vehicle_identity_store import VehicleIdentityStore
-except ImportError:  # pragma: no cover
-    from .auto_feature_sampler import AutoFeatureMode, AutoFeatureSampler
-    from .video_detector import InputConfig, VideoDetector
-    from .detection_store import DetectionStore
-    from .desktop_state import IdentitySessionLinks
-    from .feature_gallery import FeatureGallery
-    from .frame_data import FrameData
-    from .identity_manager import GlobalIdentityManager
-    from .pipeline_processor import PipelineProcessor
-    from .pipeline_worker import DetectionWorker
-    from .reframer import FramingConfig, Reframer
-    from .scene_cut import SceneCutDetector
-    from .tracking_server import TrackingWebSocketServer
-    from .track_shot_plan import TrackShotController, TrackZone
-    from .vehicle_identity_store import VehicleIdentityStore
+from autocamtracker.tracking.auto_feature_sampler import AutoFeatureMode, AutoFeatureSampler
+from autocamtracker.vision.detector import InputConfig, VideoDetector
+from autocamtracker.tracking.detection_store import DetectionStore
+from autocamtracker.core.desktop_state import IdentitySessionLinks
+from autocamtracker.tracking.feature_gallery import FeatureGallery
+from autocamtracker.core.frame_data import FrameData
+from autocamtracker.tracking.identity_manager import GlobalIdentityManager
+from autocamtracker.core.pipeline_processor import PipelineProcessor
+from autocamtracker.core.pipeline_worker import DetectionWorker
+from autocamtracker.vision.reframer import FramingConfig, Reframer
+from autocamtracker.vision.scene_cut import SceneCutDetector
+from autocamtracker.server.websocket_server import TrackingWebSocketServer
+from autocamtracker.core.track_shot_plan import TrackShotController, TrackZone
+from autocamtracker.tracking.vehicle_identity_store import VehicleIdentityStore
 
 
 @dataclass
@@ -68,7 +52,7 @@ class AppConfig:
     output_height: int = 360
     log_dir: Path = Path("outputs")
     identity_db_path: Path = Path("outputs") / "vehicle_identity.sqlite3"
-    model_dir: Path = Path(__file__).resolve().parents[1] / "model"
+    model_dir: Path = Path(__file__).resolve().parents[2] / "code" / "model"
     default_model: str = "yolo26s.pt"
     default_reid_model: str = "yolo26s-reid.onnx"
 
