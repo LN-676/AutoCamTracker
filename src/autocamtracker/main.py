@@ -815,31 +815,18 @@ class AutoCamTrackerApp:
 
         if action == "select_source":
             source = str(payload.get("source") or "").strip()
-            if source not in {"webcam", "video_file", "video_url", "screen_region", "iphone"}:
-                self.status_var.set(f"Status: iPhone requested unsupported source: {source or '--'}")
-                self.publish_desktop_state(force=True)
-                return
-            self.source_var.set(source)
-            self.on_source_selected()
-            self.status_var.set(f"Status: iPhone selected input source: {source}")
+            self.command_select_source(source, actor="iPhone")
         elif action == "auto_track":
-            if self.source_var.get() != "iphone":
-                self.source_var.set("iphone")
-                self.on_source_selected()
-            if not self.running:
-                self.start()
-            self.auto_select_one()
+            self.command_auto_track(actor="iPhone", ensure_iphone_source=True, start_if_needed=True)
         elif action == "select_gid":
             gid = self._control_gid(payload)
             if gid is not None:
-                self._select_identity_from_control(gid)
+                self.command_select_gid(gid, actor="iPhone")
         elif action == "find_gid":
             gid = self._control_gid(payload)
-            if gid is not None and self._select_identity_from_control(gid):
-                self.track_selected_identity_from_db()
+            self.command_find_gid(gid, actor="iPhone")
         elif action == "stop_motor":
-            self._disable_iphone_motor_tracking("iPhone STOP")
-            self.status_var.set("Status: iPhone requested motor stop")
+            self.command_stop_motor(actor="iPhone", reason="iPhone STOP")
         elif action == "request_state":
             pass
         else:
@@ -854,9 +841,35 @@ class AutoCamTrackerApp:
         except (TypeError, ValueError):
             return None
 
-    def _select_identity_from_control(self, vehicle_id: int) -> bool:
+    def command_select_source(self, source: str, *, actor: str = "Desktop") -> bool:
+        if source not in {"webcam", "video_file", "video_url", "screen_region", "iphone"}:
+            self.status_var.set(f"Status: {actor} requested unsupported source: {source or '--'}")
+            self.publish_desktop_state(force=True)
+            return False
+        self.source_var.set(source)
+        self.on_source_selected()
+        self.status_var.set(f"Status: {actor} selected input source: {source}")
+        self.publish_desktop_state(force=True)
+        return True
+
+    def command_auto_track(
+        self,
+        *,
+        actor: str = "Desktop",
+        ensure_iphone_source: bool = False,
+        start_if_needed: bool = False,
+    ) -> None:
+        if ensure_iphone_source and self.source_var.get() != "iphone":
+            self.command_select_source("iphone", actor=actor)
+        if start_if_needed and not self.running:
+            self.start()
+        self._run_auto_track_command(actor=actor)
+        self.publish_desktop_state(force=True)
+
+    def command_select_gid(self, vehicle_id: int, *, actor: str = "Desktop") -> bool:
         if self.identity_store.get_vehicle(vehicle_id) is None:
-            self.status_var.set(f"Status: iPhone requested missing GID {vehicle_id}")
+            self.status_var.set(f"Status: {actor} requested missing GID {vehicle_id}")
+            self.publish_desktop_state(force=True)
             return False
         self.selected_identity_tree_ids = {vehicle_id}
         if hasattr(self, "identity_tree") and str(vehicle_id) in self.identity_tree.get_children():
@@ -864,9 +877,22 @@ class AutoCamTrackerApp:
             self.identity_tree.see(str(vehicle_id))
             self.on_identity_tree_select()
         label = self.identity_store.display_label(vehicle_id)
-        self._set_identity_mode(f"Selected GID {label} from iPhone")
-        self.status_var.set(f"Status: iPhone selected GID {label}")
+        self._set_identity_mode(f"Selected GID {label} from {actor}")
+        self.status_var.set(f"Status: {actor} selected GID {label}")
+        self.publish_desktop_state(force=True)
         return True
+
+    def command_find_gid(self, vehicle_id: int | None = None, *, actor: str = "Desktop") -> str:
+        if vehicle_id is not None and not self.command_select_gid(vehicle_id, actor=actor):
+            return "break"
+        result = self._run_find_gid_command(actor=actor)
+        self.publish_desktop_state(force=True)
+        return result
+
+    def command_stop_motor(self, *, actor: str = "Desktop", reason: str | None = None) -> None:
+        self._disable_iphone_motor_tracking(reason or f"{actor} STOP")
+        self.status_var.set(f"Status: {actor} requested motor stop")
+        self.publish_desktop_state(force=True)
 
     def send_iphone_test_pulse(self) -> None:
         self._start_iphone_link()
@@ -1011,25 +1037,28 @@ class AutoCamTrackerApp:
         return Image.blend(screenshot.convert("RGB"), overlay, 0.22)
 
     def auto_select_one(self) -> None:
+        self.command_auto_track(actor="Desktop")
+
+    def _run_auto_track_command(self, *, actor: str = "Desktop") -> None:
         candidates = self.store.rank_candidates(self.last_frame_shape, strategy="stable")
         if not candidates or self.last_raw_frame is None:
             self._disable_iphone_motor_tracking("Auto Track found no vehicle")
             self.identity_manager.reset()
             self.refresh_identity_db_panel()
-            self.status_var.set("Status: Auto Track found no visible vehicle; motor stopped")
+            self.status_var.set(f"Status: {actor} Auto Track found no visible vehicle; motor stopped")
             return
         detection = self._detection_for_track(candidates[0].track_id)
         if detection is None:
             self._disable_iphone_motor_tracking("Auto Track target disappeared")
             self.identity_manager.reset()
             self.refresh_identity_db_panel()
-            self.status_var.set("Status: Auto Track target disappeared; motor stopped")
+            self.status_var.set(f"Status: {actor} Auto Track target disappeared; motor stopped")
             return
         identity = self.identity_manager.select_detection(detection, self.last_raw_frame, persist=False)
         motor_note = self._enable_iphone_motor_tracking("Auto Track")
         self.refresh_identity_db_panel()
         self.status_var.set(
-            "Status: auto tracking local track "
+            f"Status: {actor} auto tracking local track "
             f"{identity.last_track_id if identity.last_track_id is not None else '--'} without writing Identity DB; "
             f"{motor_note}"
         )
@@ -1505,6 +1534,9 @@ class AutoCamTrackerApp:
             self.identity_preview_window.withdraw()
 
     def track_selected_identity_from_db(self, _event=None) -> str:
+        return self.command_find_gid(actor="Desktop")
+
+    def _run_find_gid_command(self, *, actor: str = "Desktop") -> str:
         if self.refreshing_identity_panel:
             return "break"
 
@@ -1512,13 +1544,14 @@ class AutoCamTrackerApp:
         if not vehicle_ids:
             self._disable_iphone_motor_tracking("Find GID has no selected identity")
             self._set_identity_mode("select a GID row before Find GID")
+            self.status_var.set(f"Status: {actor} Find GID needs a selected GID")
             return "break"
         vehicle_id = vehicle_ids[0]
 
         if self.last_raw_frame is None:
             self._disable_iphone_motor_tracking("Find GID is waiting for video")
             self._set_identity_mode("Find GID waiting for current frame")
-            self.status_var.set("Status: no current frame available for DB identity tracking")
+            self.status_var.set(f"Status: no current frame available for {actor} DB identity tracking")
             return "break"
 
         identity, score = self.identity_manager.select_stored_vehicle(
@@ -1531,7 +1564,7 @@ class AutoCamTrackerApp:
         if identity is None:
             self._disable_iphone_motor_tracking("Find GID failed")
             self._set_identity_mode(f"GID {vehicle_id} was not found")
-            self.status_var.set(f"Status: vehicle id {vehicle_id} was not found in Identity DB")
+            self.status_var.set(f"Status: {actor} vehicle id {vehicle_id} was not found in Identity DB")
             return "break"
 
         label = self.identity_store.display_label(vehicle_id)
@@ -1539,14 +1572,14 @@ class AutoCamTrackerApp:
         if identity.last_track_id is None:
             self._set_identity_mode(f"Find GID searching for GID {label}")
             self.status_var.set(
-                f"Status: no Master feature match for GID {label}; searching "
+                f"Status: {actor} no Master feature match for GID {label}; searching "
                 f"(score {score:.2f}); {motor_note}"
             )
         else:
             self.identity_session_links.link(identity.last_track_id, vehicle_id)
             self._set_identity_mode(f"Find GID tracking GID {label}")
             self.status_var.set(
-                f"Status: tracking GID {label} on local track {identity.last_track_id} "
+                f"Status: {actor} tracking GID {label} on local track {identity.last_track_id} "
                 f"(score {score:.2f}); {motor_note}"
             )
             if self.current_frame_data is not None:
