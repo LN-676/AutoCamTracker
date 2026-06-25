@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 import unittest
 
-from track_shot_plan import (
+from autocamtracker.core.track_shot_plan import (
     TrackShotController,
     TrackShotDecision,
     TrackZone,
@@ -42,6 +42,7 @@ class TrackShotControllerTests(unittest.TestCase):
                 TrackShotDecision(False, "fixed_cut", "motor blocked"),
             )
         )
+
     def test_ai_tracking_requires_fresh_visual_target(self) -> None:
         controller = TrackShotController(mode="AI Tracking")
         self.assertTrue(controller.evaluate(frame_data(), self.frame_shape).publish_tracking)

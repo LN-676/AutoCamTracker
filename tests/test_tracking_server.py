@@ -5,20 +5,12 @@ from types import SimpleNamespace
 from time import monotonic, sleep
 import unittest
 
-try:
-    from tracking_server import (
-        TrackingServerConfig,
-        TrackingWebSocketServer,
-        frame_tracking_message,
-        tracking_message,
-    )
-except ImportError:  # pragma: no cover
-    from .tracking_server import (
-        TrackingServerConfig,
-        TrackingWebSocketServer,
-        frame_tracking_message,
-        tracking_message,
-    )
+from autocamtracker.server.websocket_server import (
+    TrackingServerConfig,
+    TrackingWebSocketServer,
+    frame_tracking_message,
+    tracking_message,
+)
 
 
 class TrackingMessageTests(unittest.TestCase):

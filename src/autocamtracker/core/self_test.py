@@ -13,7 +13,7 @@ import tempfile
 import traceback
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 MODEL_PATH = PROJECT_ROOT / "code" / "model" / "yolo26s.pt"
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
 TEST_VIDEO = OUTPUT_DIR / "self_test_input.mp4"

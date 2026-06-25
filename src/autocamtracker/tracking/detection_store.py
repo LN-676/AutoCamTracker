@@ -14,10 +14,7 @@ from dataclasses import dataclass, field
 from math import hypot
 from typing import Literal
 
-try:
-    from video_detector import TrackedDetection
-except ImportError:  # pragma: no cover
-    from .video_detector import TrackedDetection
+from autocamtracker.vision.detector import TrackedDetection
 
 
 RankStrategy = Literal["stable", "largest", "center", "confidence"]

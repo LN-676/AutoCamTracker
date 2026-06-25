@@ -15,10 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-try:
-    from detection_store import DetectionStore, VehicleCandidate
-except ImportError:  # pragma: no cover
-    from .detection_store import DetectionStore, VehicleCandidate
+from autocamtracker.tracking.detection_store import DetectionStore, VehicleCandidate
 
 
 TrackingStatus = Literal["idle", "tracking", "lost", "failed"]

@@ -10,20 +10,12 @@ from __future__ import annotations
 from time import time
 from typing import Callable
 
-try:
-    from detection_store import DetectionStore
-    from frame_data import FrameData
-    from identity_manager import GlobalIdentityManager
-    from reframer import Reframer
-    from scene_cut import SceneCutDetector
-    from video_detector import TrackedDetection
-except ImportError:  # pragma: no cover
-    from .detection_store import DetectionStore
-    from .frame_data import FrameData
-    from .identity_manager import GlobalIdentityManager
-    from .reframer import Reframer
-    from .scene_cut import SceneCutDetector
-    from .video_detector import TrackedDetection
+from autocamtracker.tracking.detection_store import DetectionStore
+from autocamtracker.core.frame_data import FrameData
+from autocamtracker.tracking.identity_manager import GlobalIdentityManager
+from autocamtracker.vision.reframer import Reframer
+from autocamtracker.vision.scene_cut import SceneCutDetector
+from autocamtracker.vision.detector import TrackedDetection
 
 
 class PipelineProcessor:

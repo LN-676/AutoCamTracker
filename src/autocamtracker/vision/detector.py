@@ -27,7 +27,7 @@ SourceType = Literal["webcam", "video_file", "video_url", "screen_region", "ipho
 TrackerName = Literal["botsort", "deepocsort"]
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 MODEL_DIR = PROJECT_ROOT / "code" / "model"
 CACHE_ROOT = Path(tempfile.gettempdir()) / "autocamtracker-cache"
 
@@ -40,10 +40,7 @@ TRACKER_CONFIGS: dict[TrackerName, str] = {
 VEHICLE_CLASS_NAMES = {"car", "truck", "bus", "motorcycle"}
 
 
-try:
-    from tracker_adapter import DeepOcSortAdapter, TrackerInputDetection
-except ImportError:  # pragma: no cover
-    from .tracker_adapter import DeepOcSortAdapter, TrackerInputDetection
+from autocamtracker.tracking.tracker_adapter import DeepOcSortAdapter, TrackerInputDetection
 
 
 @dataclass
