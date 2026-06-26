@@ -156,7 +156,7 @@ struct ContentView: View {
             await controlService?.apply(command)
         }
         networkClient.onTimeout = { [weak controlService] in
-            await controlService?.emergencyStop(reason: "V1.61 timeout or disconnect")
+            await controlService?.emergencyStop(reason: "V1.62 timeout or disconnect")
         }
         await cameraSession.start()
         await dockKitManager.startListening()

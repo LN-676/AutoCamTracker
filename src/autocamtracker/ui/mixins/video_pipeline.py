@@ -413,7 +413,7 @@ class VideoPipelineMixin:
         return {
             "type": "desktop_state",
             "version": "1.0",
-            "source_version": "1.61",
+            "source_version": "1.62",
             "timestamp_ms": int(time() * 1000),
             "source": self.source_var.get(),
             "running": bool(self.running),

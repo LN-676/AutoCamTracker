@@ -1,4 +1,4 @@
-"""WebSocket bridge from AutoCamTracker V1.61 to the DockKit iOS app."""
+"""WebSocket bridge from AutoCamTracker V1.62 to the DockKit iOS app."""
 
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ def tracking_message(
     message = {
         "type": "tracking",
         "version": "1.0",
-        "source_version": "1.61",
+        "source_version": "1.62",
         "sequence": sequence,
         "target_locked": bool(target_locked),
         "target_id": target_id,
@@ -79,7 +79,7 @@ def tracking_message(
 
 
 def frame_tracking_message(frame_data, frame_shape, sequence: int = 0) -> dict[str, Any]:
-    """Convert V1.61 pixel-space framing status into normalized gimbal error."""
+    """Convert V1.62 pixel-space framing status into normalized gimbal error."""
 
     frame_h, frame_w = frame_shape[:2]
     targets = frame_data.selected_targets
