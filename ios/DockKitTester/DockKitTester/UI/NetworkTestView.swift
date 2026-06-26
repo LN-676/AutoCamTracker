@@ -55,6 +55,10 @@ struct NetworkTestView: View {
             Text("Camera frames sent: \(client.cameraFramesSent)")
                 .font(.system(.caption, design: .monospaced))
 
+            Text("Camera frames dropped: \(client.cameraFramesDropped)")
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+
             Button("Inject Local Fake JSON") {
                 Task { await client.sendFakeCommand() }
             }

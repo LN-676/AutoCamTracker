@@ -16,6 +16,7 @@ final class V13NetworkClient: ObservableObject {
     @Published private(set) var lastCommand: TrackingCommand?
     @Published private(set) var desktopState: DesktopState?
     @Published private(set) var cameraFramesSent = 0
+    @Published private(set) var cameraFramesDropped = 0
     @Published var serverURL: String {
         didSet { UserDefaults.standard.set(serverURL, forKey: Self.serverURLKey) }
     }
@@ -28,6 +29,8 @@ final class V13NetworkClient: ObservableObject {
     private var receiveTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
     private var socketTask: URLSessionWebSocketTask?
+    private var latestCameraFrame: Data?
+    private var cameraSendInFlight = false
     private var intentionalDisconnect = false
     private var sequenceValidator = TrackingCommandSequenceValidator()
     private let timeout: Duration = .milliseconds(500)
@@ -146,12 +149,30 @@ final class V13NetworkClient: ObservableObject {
     }
 
     func sendCameraFrame(_ data: Data) async {
-        guard let socketTask, status != .offline, status != .failed else { return }
-        do {
-            try await socketTask.send(.data(data))
-            cameraFramesSent += 1
-        } catch {
-            logger.log(.error, "Camera frame send failed: \(error.localizedDescription)")
+        guard status != .offline, status != .failed else { return }
+        if cameraSendInFlight {
+            if latestCameraFrame != nil {
+                cameraFramesDropped += 1
+            }
+            latestCameraFrame = data
+            return
+        }
+
+        latestCameraFrame = data
+        cameraSendInFlight = true
+        defer { cameraSendInFlight = false }
+
+        while let frame = latestCameraFrame {
+            latestCameraFrame = nil
+            guard let socketTask, status != .offline, status != .failed else { return }
+            do {
+                try await socketTask.send(.data(frame))
+                cameraFramesSent += 1
+            } catch {
+                latestCameraFrame = nil
+                logger.log(.error, "Camera frame send failed: \(error.localizedDescription)")
+                return
+            }
         }
     }
 
@@ -191,7 +212,10 @@ final class V13NetworkClient: ObservableObject {
         lastCommand = nil
         desktopState = nil
         sequenceValidator.reset()
+        latestCameraFrame = nil
+        cameraSendInFlight = false
         cameraFramesSent = 0
+        cameraFramesDropped = 0
         logger.log(.warning, "AutoCamTracker client disconnected; requesting safety stop.")
         await onTimeout?()
     }
@@ -225,6 +249,7 @@ final class V13NetworkClient: ObservableObject {
         reconnectTask?.cancel()
         socketTask?.cancel(with: .goingAway, reason: nil)
         socketTask = nil
+        latestCameraFrame = nil
     }
 
     private func messageType(in data: Data) -> String? {
