@@ -75,6 +75,7 @@ struct ContentView: View {
                         onCommand: { await controlService.execute($0) }
                     )
                     velocityPanel
+                    trackingCalibrationPanel
                 }
                 .padding()
             }
@@ -133,6 +134,36 @@ struct ContentView: View {
                 )
             )
             .font(.system(.body, design: .monospaced))
+            if let reason = controlService.lastStopReason {
+                Text(reason)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .panelStyle()
+    }
+
+    private var trackingCalibrationPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("追蹤校正")
+                .font(.headline)
+            Toggle(
+                "反轉左右追蹤方向",
+                isOn: Binding(
+                    get: { controlService.yawInverted },
+                    set: { controlService.setYawInverted($0) }
+                )
+            )
+            Toggle(
+                "反轉上下追蹤方向",
+                isOn: Binding(
+                    get: { controlService.pitchInverted },
+                    set: { controlService.setPitchInverted($0) }
+                )
+            )
+            Text("如果 Find GID 後目標越追越遠，先切換左右方向。誤差連續沒有下降時 App 會自動 STOP。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .panelStyle()
     }

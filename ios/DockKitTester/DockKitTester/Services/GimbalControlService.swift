@@ -4,15 +4,37 @@ import Combine
 @MainActor
 final class GimbalControlService: ObservableObject {
     @Published private(set) var currentVelocity = GimbalVelocity.zero
+    @Published private(set) var yawInverted = false
+    @Published private(set) var pitchInverted = false
+    @Published private(set) var lastStopReason: String?
 
     private let dockKitManager: DockKitMotorControlling
     private let logger: AppLogger
     private var calculator = GimbalVelocityCalculator()
     private var commandGeneration = 0
+    private let yawInvertedKey = "AutoCamTrackerYawInverted"
+    private let pitchInvertedKey = "AutoCamTrackerPitchInverted"
 
     init(dockKitManager: DockKitMotorControlling, logger: AppLogger) {
         self.dockKitManager = dockKitManager
         self.logger = logger
+        yawInverted = UserDefaults.standard.bool(forKey: yawInvertedKey)
+        pitchInverted = UserDefaults.standard.bool(forKey: pitchInvertedKey)
+        calculator.setTrackingAxisInversion(yawInverted: yawInverted, pitchInverted: pitchInverted)
+    }
+
+    func setYawInverted(_ inverted: Bool) {
+        yawInverted = inverted
+        UserDefaults.standard.set(inverted, forKey: yawInvertedKey)
+        calculator.setTrackingAxisInversion(yawInverted: yawInverted, pitchInverted: pitchInverted)
+        logger.log(.info, "Tracking yaw direction \(inverted ? "inverted" : "normal").")
+    }
+
+    func setPitchInverted(_ inverted: Bool) {
+        pitchInverted = inverted
+        UserDefaults.standard.set(inverted, forKey: pitchInvertedKey)
+        calculator.setTrackingAxisInversion(yawInverted: yawInverted, pitchInverted: pitchInverted)
+        logger.log(.info, "Tracking pitch direction \(inverted ? "inverted" : "normal").")
     }
 
     func execute(_ command: GimbalCommand) async {
@@ -60,6 +82,10 @@ final class GimbalControlService: ObservableObject {
         let generation = commandGeneration
         let velocity = calculator.velocity(for: trackingCommand)
         currentVelocity = velocity
+        if let reason = calculator.safetyStopReason {
+            await emergencyStop(reason: reason)
+            return
+        }
 
         await dockKitManager.setAngularVelocity(
             yaw: velocity.yaw,
@@ -88,6 +114,7 @@ final class GimbalControlService: ObservableObject {
         commandGeneration += 1
         calculator.reset()
         currentVelocity = .zero
+        lastStopReason = reason
         logger.log(.warning, "Safety stop: \(reason).")
         await dockKitManager.stop()
     }

@@ -17,8 +17,8 @@ final class GimbalVelocityCalculatorTests: XCTestCase {
 
         let velocity = calculator.velocity(for: command)
 
-        XCTAssertEqual(velocity.yaw, 0.24, accuracy: 0.000_001)
-        XCTAssertEqual(velocity.pitch, -0.12, accuracy: 0.000_001)
+        XCTAssertEqual(velocity.yaw, 0.105, accuracy: 0.000_001)
+        XCTAssertEqual(velocity.pitch, -0.066, accuracy: 0.000_001)
         XCTAssertEqual(velocity.roll, 0)
     }
 
@@ -38,6 +38,30 @@ final class GimbalVelocityCalculatorTests: XCTestCase {
 
         XCTAssertEqual(stopped, .zero)
         XCTAssertEqual(calculator.previous, .zero)
+    }
+
+    func testAxisInversionFlipsTrackingDirections() {
+        var calculator = GimbalVelocityCalculator()
+        calculator.setTrackingAxisInversion(yawInverted: true, pitchInverted: true)
+
+        let velocity = calculator.velocity(for: makeCommand(errorX: 0.3, errorY: -0.3))
+
+        XCTAssertLessThan(velocity.yaw, 0)
+        XCTAssertLessThan(velocity.pitch, 0)
+    }
+
+    func testNonImprovingTrackingTriggersSafetyStop() {
+        var calculator = GimbalVelocityCalculator(
+            configuration: GimbalControlConfiguration(maxNonImprovingUpdates: 3)
+        )
+
+        _ = calculator.velocity(for: makeCommand(errorX: 0.5, errorY: 0))
+        _ = calculator.velocity(for: makeCommand(errorX: 0.5, errorY: 0))
+        _ = calculator.velocity(for: makeCommand(errorX: 0.5, errorY: 0))
+        let stopped = calculator.velocity(for: makeCommand(errorX: 0.5, errorY: 0))
+
+        XCTAssertEqual(stopped, .zero)
+        XCTAssertNotNil(calculator.safetyStopReason)
     }
 
     private func makeCommand(
