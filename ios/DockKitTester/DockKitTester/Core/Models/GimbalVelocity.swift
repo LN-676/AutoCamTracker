@@ -22,6 +22,30 @@ struct GimbalControlConfiguration: Equatable, Sendable {
     var maxNonImprovingUpdates = 8
 }
 
+struct GimbalCalibrationProfile: Codable, Equatable, Sendable {
+    var yawInverted = false
+    var pitchInverted = false
+    var maxYawSpeed = 0.35
+    var maxPitchSpeed = 0.22
+    var deadZone = 0.05
+    var minimumErrorImprovement = 0.01
+    var maxNonImprovingUpdates = 8
+
+    static let conservative = GimbalCalibrationProfile()
+
+    var configuration: GimbalControlConfiguration {
+        GimbalControlConfiguration(
+            maxYawSpeed: clamped(maxYawSpeed, min: 0.08, max: 0.8),
+            maxPitchSpeed: clamped(maxPitchSpeed, min: 0.06, max: 0.5),
+            deadZone: clamped(deadZone, min: 0.02, max: 0.2),
+            yawDirection: yawInverted ? -1 : 1,
+            pitchDirection: pitchInverted ? -1 : 1,
+            minimumErrorImprovement: clamped(minimumErrorImprovement, min: 0.0, max: 0.08),
+            maxNonImprovingUpdates: max(3, min(30, maxNonImprovingUpdates))
+        )
+    }
+}
+
 struct GimbalVelocityCalculator: Sendable {
     var configuration: GimbalControlConfiguration
     private(set) var previous = GimbalVelocity.zero
@@ -31,6 +55,11 @@ struct GimbalVelocityCalculator: Sendable {
 
     init(configuration: GimbalControlConfiguration = .init()) {
         self.configuration = configuration
+    }
+
+    mutating func applyCalibration(_ calibration: GimbalCalibrationProfile) {
+        configuration = calibration.configuration
+        reset()
     }
 
     mutating func setTrackingAxisInversion(yawInverted: Bool, pitchInverted: Bool) {
@@ -124,4 +153,8 @@ struct GimbalVelocityCalculator: Sendable {
         nonImprovingUpdates += 1
         return nonImprovingUpdates < configuration.maxNonImprovingUpdates
     }
+}
+
+private func clamped(_ value: Double, min lowerBound: Double, max upperBound: Double) -> Double {
+    max(lowerBound, min(upperBound, value))
 }

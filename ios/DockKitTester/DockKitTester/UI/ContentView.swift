@@ -145,27 +145,98 @@ struct ContentView: View {
 
     private var trackingCalibrationPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("追蹤校正")
-                .font(.headline)
+            HStack {
+                Text("追蹤校正")
+                    .font(.headline)
+                Spacer()
+                Button("重設") {
+                    controlService.resetCalibration()
+                }
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.bordered)
+            }
             Toggle(
                 "反轉左右追蹤方向",
                 isOn: Binding(
-                    get: { controlService.yawInverted },
+                    get: { controlService.calibration.yawInverted },
                     set: { controlService.setYawInverted($0) }
                 )
             )
             Toggle(
                 "反轉上下追蹤方向",
                 isOn: Binding(
-                    get: { controlService.pitchInverted },
+                    get: { controlService.calibration.pitchInverted },
                     set: { controlService.setPitchInverted($0) }
                 )
             )
-            Text("如果 Find GID 後目標越追越遠，先切換左右方向。誤差連續沒有下降時 App 會自動 STOP。")
+
+            calibrationSlider(
+                title: "左右最大速度",
+                value: controlService.calibration.maxYawSpeed,
+                range: 0.08...0.8,
+                format: "%.2f",
+                onChange: controlService.setMaxYawSpeed
+            )
+            calibrationSlider(
+                title: "上下最大速度",
+                value: controlService.calibration.maxPitchSpeed,
+                range: 0.06...0.5,
+                format: "%.2f",
+                onChange: controlService.setMaxPitchSpeed
+            )
+            calibrationSlider(
+                title: "中心停止區",
+                value: controlService.calibration.deadZone,
+                range: 0.02...0.2,
+                format: "%.2f",
+                onChange: controlService.setDeadZone
+            )
+            calibrationSlider(
+                title: "改善門檻",
+                value: controlService.calibration.minimumErrorImprovement,
+                range: 0.0...0.08,
+                format: "%.3f",
+                onChange: controlService.setMinimumErrorImprovement
+            )
+            calibrationSlider(
+                title: "無改善停止次數",
+                value: Double(controlService.calibration.maxNonImprovingUpdates),
+                range: 3...30,
+                format: "%.0f",
+                onChange: controlService.setMaxNonImprovingUpdates
+            )
+
+            Text("先用保守速度測試。若 Find GID 後目標越追越遠，先切換左右方向；若網路或辨識不穩，放大中心停止區並降低最大速度。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .panelStyle()
+    }
+
+    private func calibrationSlider(
+        title: String,
+        value: Double,
+        range: ClosedRange<Double>,
+        format: String,
+        onChange: @escaping (Double) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(String(format: format, value))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            Slider(
+                value: Binding(
+                    get: { value },
+                    set: onChange
+                ),
+                in: range
+            )
+        }
+        .font(.subheadline)
     }
 
     private func prepareServices() async {
@@ -187,7 +258,7 @@ struct ContentView: View {
             await controlService?.apply(command)
         }
         networkClient.onTimeout = { [weak controlService] in
-            await controlService?.emergencyStop(reason: "V1.62 timeout or disconnect")
+            await controlService?.emergencyStop(reason: "V1.64 timeout or disconnect")
         }
         await cameraSession.start()
         await dockKitManager.startListening()

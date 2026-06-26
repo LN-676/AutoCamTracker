@@ -75,7 +75,7 @@ class TrackingMessageTests(unittest.TestCase):
         self.assertEqual(message["error_x"], 1.0)
         self.assertEqual(message["error_y"], -1.0)
         self.assertEqual(message["confidence"], 1.0)
-        self.assertEqual(message["source_version"], "1.62")
+        self.assertEqual(message["source_version"], "1.64")
 
     def test_motor_status_reports_dockkit_readiness(self) -> None:
         server = TrackingWebSocketServer()

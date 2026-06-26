@@ -4,37 +4,57 @@ import Combine
 @MainActor
 final class GimbalControlService: ObservableObject {
     @Published private(set) var currentVelocity = GimbalVelocity.zero
-    @Published private(set) var yawInverted = false
-    @Published private(set) var pitchInverted = false
+    @Published private(set) var calibration = GimbalCalibrationProfile.conservative
     @Published private(set) var lastStopReason: String?
 
     private let dockKitManager: DockKitMotorControlling
     private let logger: AppLogger
     private var calculator = GimbalVelocityCalculator()
     private var commandGeneration = 0
-    private let yawInvertedKey = "AutoCamTrackerYawInverted"
-    private let pitchInvertedKey = "AutoCamTrackerPitchInverted"
+    private let calibrationKey = "AutoCamTrackerGimbalCalibrationV164"
 
     init(dockKitManager: DockKitMotorControlling, logger: AppLogger) {
         self.dockKitManager = dockKitManager
         self.logger = logger
-        yawInverted = UserDefaults.standard.bool(forKey: yawInvertedKey)
-        pitchInverted = UserDefaults.standard.bool(forKey: pitchInvertedKey)
-        calculator.setTrackingAxisInversion(yawInverted: yawInverted, pitchInverted: pitchInverted)
+        calibration = Self.loadCalibration(key: calibrationKey)
+        calculator.applyCalibration(calibration)
     }
 
     func setYawInverted(_ inverted: Bool) {
-        yawInverted = inverted
-        UserDefaults.standard.set(inverted, forKey: yawInvertedKey)
-        calculator.setTrackingAxisInversion(yawInverted: yawInverted, pitchInverted: pitchInverted)
+        updateCalibration { $0.yawInverted = inverted }
         logger.log(.info, "Tracking yaw direction \(inverted ? "inverted" : "normal").")
     }
 
     func setPitchInverted(_ inverted: Bool) {
-        pitchInverted = inverted
-        UserDefaults.standard.set(inverted, forKey: pitchInvertedKey)
-        calculator.setTrackingAxisInversion(yawInverted: yawInverted, pitchInverted: pitchInverted)
+        updateCalibration { $0.pitchInverted = inverted }
         logger.log(.info, "Tracking pitch direction \(inverted ? "inverted" : "normal").")
+    }
+
+    func setMaxYawSpeed(_ value: Double) {
+        updateCalibration { $0.maxYawSpeed = value }
+    }
+
+    func setMaxPitchSpeed(_ value: Double) {
+        updateCalibration { $0.maxPitchSpeed = value }
+    }
+
+    func setDeadZone(_ value: Double) {
+        updateCalibration { $0.deadZone = value }
+    }
+
+    func setMinimumErrorImprovement(_ value: Double) {
+        updateCalibration { $0.minimumErrorImprovement = value }
+    }
+
+    func setMaxNonImprovingUpdates(_ value: Double) {
+        updateCalibration { $0.maxNonImprovingUpdates = Int(value.rounded()) }
+    }
+
+    func resetCalibration() {
+        calibration = .conservative
+        saveCalibration()
+        calculator.applyCalibration(calibration)
+        logger.log(.info, "Tracking calibration reset to conservative defaults.")
     }
 
     func execute(_ command: GimbalCommand) async {
@@ -65,8 +85,8 @@ final class GimbalControlService: ObservableObject {
 
     func apply(_ trackingCommand: TrackingCommand) async {
         guard trackingCommand.type == "tracking" else {
-            logger.log(.error, "Ignored V1.62 message with unsupported type: \(trackingCommand.type).")
-            await emergencyStop(reason: "invalid V1.62 message")
+            logger.log(.error, "Ignored V1.64 message with unsupported type: \(trackingCommand.type).")
+            await emergencyStop(reason: "invalid V1.64 message")
             return
         }
 
@@ -117,5 +137,25 @@ final class GimbalControlService: ObservableObject {
         lastStopReason = reason
         logger.log(.warning, "Safety stop: \(reason).")
         await dockKitManager.stop()
+    }
+
+    private func updateCalibration(_ mutate: (inout GimbalCalibrationProfile) -> Void) {
+        mutate(&calibration)
+        calibration = calibration
+        saveCalibration()
+        calculator.applyCalibration(calibration)
+    }
+
+    private func saveCalibration() {
+        guard let data = try? JSONEncoder().encode(calibration) else { return }
+        UserDefaults.standard.set(data, forKey: calibrationKey)
+    }
+
+    private static func loadCalibration(key: String) -> GimbalCalibrationProfile {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let profile = try? JSONDecoder().decode(GimbalCalibrationProfile.self, from: data) else {
+            return .conservative
+        }
+        return profile
     }
 }

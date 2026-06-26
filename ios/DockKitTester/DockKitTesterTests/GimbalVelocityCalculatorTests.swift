@@ -42,12 +42,36 @@ final class GimbalVelocityCalculatorTests: XCTestCase {
 
     func testAxisInversionFlipsTrackingDirections() {
         var calculator = GimbalVelocityCalculator()
-        calculator.setTrackingAxisInversion(yawInverted: true, pitchInverted: true)
+        calculator.applyCalibration(
+            GimbalCalibrationProfile(yawInverted: true, pitchInverted: true)
+        )
 
         let velocity = calculator.velocity(for: makeCommand(errorX: 0.3, errorY: -0.3))
 
         XCTAssertLessThan(velocity.yaw, 0)
         XCTAssertLessThan(velocity.pitch, 0)
+    }
+
+    func testCalibrationProfileAppliesSafetyLimits() {
+        var calculator = GimbalVelocityCalculator()
+        calculator.applyCalibration(
+            GimbalCalibrationProfile(
+                maxYawSpeed: 0.1,
+                maxPitchSpeed: 0.08,
+                deadZone: 0.12,
+                minimumErrorImprovement: 0.04,
+                maxNonImprovingUpdates: 5
+            )
+        )
+
+        let deadZoneVelocity = calculator.velocity(for: makeCommand(errorX: 0.08, errorY: 0.08))
+        let trackingVelocity = calculator.velocity(for: makeCommand(errorX: 1.0, errorY: 1.0))
+
+        XCTAssertEqual(deadZoneVelocity, .zero)
+        XCTAssertEqual(trackingVelocity.yaw, 0.03, accuracy: 0.000_001)
+        XCTAssertEqual(trackingVelocity.pitch, -0.024, accuracy: 0.000_001)
+        XCTAssertEqual(calculator.configuration.minimumErrorImprovement, 0.04)
+        XCTAssertEqual(calculator.configuration.maxNonImprovingUpdates, 5)
     }
 
     func testNonImprovingTrackingTriggersSafetyStop() {
