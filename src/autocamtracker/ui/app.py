@@ -53,7 +53,7 @@ class AppConfig:
     output_height: int = 360
     log_dir: Path = Path("outputs")
     identity_db_path: Path = Path("outputs") / "vehicle_identity.sqlite3"
-    model_dir: Path = Path(__file__).resolve().parents[2] / "code" / "model"
+    model_dir: Path = Path(__file__).resolve().parents[3] / "code" / "model"
     default_model: str = "yolo26s.pt"
     default_reid_model: str = "yolo26s-reid.onnx"
 
@@ -153,4 +153,3 @@ class AutoCamTrackerApp(UIBuilderMixin, IdentityPanelMixin, VideoPipelineMixin, 
         self.root.after_idle(self._preload_reid_model)
 
     """Tkinter integration shell for the five V1 modules."""
-

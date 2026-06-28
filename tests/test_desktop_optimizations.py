@@ -15,7 +15,7 @@ if str(V1_DIR) not in sys.path:
 from autocamtracker.core.desktop_state import IdentitySessionLinks
 from autocamtracker.tracking.feature_gallery import FeatureGallery
 from autocamtracker.tracking.identity_manager import GlobalIdentityManager
-from autocamtracker.core.pipeline_worker import DetectionWorker
+from autocamtracker.core.pipeline_worker import TrackingWorker
 from autocamtracker.tracking.vehicle_identity_store import VehicleIdentityStore
 from autocamtracker.vision.detector import TrackedDetection
 
@@ -43,11 +43,43 @@ class FakeDetector:
         self.calls += 1
         return f"frame-{self.calls}", [self.calls]
 
+    def get_source_fps(self):
+        return 15.0
 
-class DetectionWorkerTests(unittest.TestCase):
-    def test_requested_detection_returns_from_background_worker(self) -> None:
+    def reset_tracker_state(self):
+        pass
+
+
+class FakePipeline:
+    def process(
+        self,
+        *,
+        frame,
+        detections,
+        draw_detections,
+        reset_tracker_state,
+        inference_time_ms,
+        source_fps,
+        skipped_frames,
+    ):
+        return {
+            "frame": draw_detections(frame, detections),
+            "detections": detections,
+            "source_fps": source_fps,
+            "skipped_frames": skipped_frames,
+            "inference_time_ms": inference_time_ms,
+        }
+
+
+class TrackingWorkerTests(unittest.TestCase):
+    def test_requested_frame_returns_from_background_worker(self) -> None:
         detector = FakeDetector()
-        worker = DetectionWorker(detector)
+        worker = TrackingWorker(
+            detector,
+            FakePipeline(),
+            lambda frame, _detections: frame,
+            lambda: 0,
+        )
         try:
             self.assertTrue(worker.request_frame())
             self.assertFalse(worker.request_frame())
@@ -58,8 +90,10 @@ class DetectionWorkerTests(unittest.TestCase):
                 sleep(0.005)
             self.assertIsNotNone(result)
             self.assertIsNone(result.error)
-            self.assertEqual(result.frame, "frame-1")
-            self.assertEqual(result.detections, [1])
+            self.assertEqual(result.raw_frame, "frame-1")
+            self.assertEqual(result.frame_data["frame"], "frame-1")
+            self.assertEqual(result.frame_data["detections"], [1])
+            self.assertEqual(result.frame_data["source_fps"], 15.0)
             self.assertGreaterEqual(result.inference_time_ms, 0.0)
         finally:
             worker.close()
@@ -158,6 +192,9 @@ class ReIDRuntimeOptimizationTests(unittest.TestCase):
                 vector = np.asarray([bbox[0] + bbox[2], bbox[1] + bbox[3], 1.0], dtype=np.float32)
                 vector /= np.linalg.norm(vector)
                 return vector.tolist()
+
+            def extract_batch(self, frame, bboxes):
+                return [self.extract(frame, bbox) for bbox in bboxes]
 
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "identity.sqlite3"
