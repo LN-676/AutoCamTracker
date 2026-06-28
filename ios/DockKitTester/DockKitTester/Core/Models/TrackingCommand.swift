@@ -86,6 +86,11 @@ struct MotorStatusMessage: Codable, Equatable, Sendable {
     let systemTrackingEnabled: Bool?
     let lastError: String?
     let timestampMs: Int64
+    let currentVelocity: GimbalVelocity?
+    let lastCommand: TrackingCommand?
+    let lastStopReason: String?
+    let cameraZoomFactor: Double?
+    let cameraDisplayZoomFactor: Double?
 
     enum CodingKeys: String, CodingKey {
         case type, docked
@@ -93,6 +98,11 @@ struct MotorStatusMessage: Codable, Equatable, Sendable {
         case systemTrackingEnabled = "system_tracking_enabled"
         case lastError = "last_error"
         case timestampMs = "timestamp_ms"
+        case currentVelocity = "current_velocity"
+        case lastCommand = "last_command"
+        case lastStopReason = "last_stop_reason"
+        case cameraZoomFactor = "camera_zoom_factor"
+        case cameraDisplayZoomFactor = "camera_display_zoom_factor"
     }
 }
 
@@ -101,17 +111,20 @@ struct ControlMessage: Codable, Equatable, Sendable {
     let action: String
     let source: String?
     let gid: Int?
+    let framing: String?
     let timestampMs: Int64
 
-    init(action: String, source: String? = nil, gid: Int? = nil) {
+    init(action: String, source: String? = nil, gid: Int? = nil, framing: String? = nil) {
         self.action = action
         self.source = source
         self.gid = gid
+        self.framing = framing
         self.timestampMs = Int64(Date().timeIntervalSince1970 * 1_000)
     }
 
     enum CodingKeys: String, CodingKey {
         case type, action, source, gid
+        case framing
         case timestampMs = "timestamp_ms"
     }
 }
@@ -142,15 +155,22 @@ struct DesktopState: Codable, Equatable, Sendable {
         let errorX: Double
         let errorY: Double
         let confidence: Double
+        let lostFrames: Int?
+        let candidateCount: Int?
+        let bbox: [Double]?
+        let targetCenter: [Double]?
 
         enum CodingKeys: String, CodingKey {
-            case status, confidence
+            case status, confidence, bbox
             case targetLocked = "target_locked"
             case targetId = "target_id"
             case selectedGid = "selected_gid"
             case selectedLid = "selected_lid"
             case errorX = "error_x"
             case errorY = "error_y"
+            case lostFrames = "lost_frames"
+            case candidateCount = "candidate_count"
+            case targetCenter = "target_center"
         }
     }
 
@@ -162,6 +182,11 @@ struct DesktopState: Codable, Equatable, Sendable {
         let manualReady: Bool
         let systemTrackingEnabled: Bool?
         let lastError: String?
+        let currentVelocity: GimbalVelocity?
+        let lastCommand: TrackingCommand?
+        let lastStopReason: String?
+        let cameraZoomFactor: Double?
+        let cameraDisplayZoomFactor: Double?
 
         enum CodingKeys: String, CodingKey {
             case armed, ready, docked
@@ -169,6 +194,11 @@ struct DesktopState: Codable, Equatable, Sendable {
             case manualReady = "manual_ready"
             case systemTrackingEnabled = "system_tracking_enabled"
             case lastError = "last_error"
+            case currentVelocity = "current_velocity"
+            case lastCommand = "last_command"
+            case lastStopReason = "last_stop_reason"
+            case cameraZoomFactor = "camera_zoom_factor"
+            case cameraDisplayZoomFactor = "camera_display_zoom_factor"
         }
     }
 

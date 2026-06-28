@@ -160,6 +160,12 @@ class CommandsMixin:
         if self.source_var.get() != "iphone":
             self.iphone_motor_tracking_enabled = False
             self.tracking_server.publish_stop()
+            self.telemetry_logger.log(
+                "motor_arm_blocked",
+                action=action,
+                reason="motor requires iPhone input",
+                source=self.source_var.get(),
+            )
             return "digital tracking only (motor requires iPhone input)"
 
         self._start_iphone_link()
@@ -167,6 +173,12 @@ class CommandsMixin:
         self.track_shot_controller.set_mode("AI Tracking")
         self.track_shot_state_var.set("Shot: AI Tracking · tracking · motor armed")
         self.iphone_motor_tracking_enabled = True
+        self.telemetry_logger.log(
+            "motor_armed",
+            action=action,
+            client_count=self.tracking_server.client_count,
+            motor_ready=self.tracking_server.motor_ready,
+        )
         self.publish_desktop_state(force=True)
         if self.tracking_server.client_count == 0:
             return f"{action} motor armed; waiting for iPhone connection"
@@ -177,8 +189,10 @@ class CommandsMixin:
     def _disable_iphone_motor_tracking(self, reason: str) -> None:
         """Disarm motor output and immediately send an explicit safety stop."""
 
+        was_enabled = bool(self.iphone_motor_tracking_enabled)
         self.iphone_motor_tracking_enabled = False
         self.tracking_server.publish_stop()
+        self.telemetry_logger.log("motor_disarmed", reason=reason, was_enabled=was_enabled)
         if hasattr(self, "track_shot_state_var"):
             self.track_shot_state_var.set(
                 f"Shot: {self.track_shot_controller.mode} · motor OFF · {reason}"
@@ -247,6 +261,9 @@ class CommandsMixin:
         elif action == "find_gid":
             gid = self._control_gid(payload)
             self.command_find_gid(gid, actor="iPhone")
+        elif action == "set_framing":
+            framing = str(payload.get("framing") or payload.get("mode") or "").strip().lower()
+            self.command_set_framing(framing, actor="iPhone")
         elif action == "stop_motor":
             self.command_stop_motor(actor="iPhone", reason="iPhone STOP")
         elif action == "request_state":
@@ -264,6 +281,7 @@ class CommandsMixin:
             return None
 
     def command_select_source(self, source: str, *, actor: str = "Desktop") -> bool:
+        self.telemetry_logger.log("control_select_source", actor=actor, source=source)
         if source not in {"webcam", "video_file", "video_url", "screen_region", "iphone"}:
             self.status_var.set(f"Status: {actor} requested unsupported source: {source or '--'}")
             self.publish_desktop_state(force=True)
@@ -281,6 +299,7 @@ class CommandsMixin:
         ensure_iphone_source: bool = False,
         start_if_needed: bool = False,
     ) -> None:
+        self.telemetry_logger.log("control_auto_track", actor=actor)
         if ensure_iphone_source and self.source_var.get() != "iphone":
             self.command_select_source("iphone", actor=actor)
         if start_if_needed and not self.running:
@@ -289,6 +308,7 @@ class CommandsMixin:
         self.publish_desktop_state(force=True)
 
     def command_select_gid(self, vehicle_id: int, *, actor: str = "Desktop") -> bool:
+        self.telemetry_logger.log("control_select_gid", actor=actor, gid=vehicle_id)
         if self.identity_store.get_vehicle(vehicle_id) is None:
             self.status_var.set(f"Status: {actor} requested missing GID {vehicle_id}")
             self.publish_desktop_state(force=True)
@@ -305,13 +325,29 @@ class CommandsMixin:
         return True
 
     def command_find_gid(self, vehicle_id: int | None = None, *, actor: str = "Desktop") -> str:
+        self.telemetry_logger.log("control_find_gid", actor=actor, gid=vehicle_id)
         if vehicle_id is not None and not self.command_select_gid(vehicle_id, actor=actor):
             return "break"
         result = self._run_find_gid_command(actor=actor)
+        self.telemetry_logger.log("control_find_gid_result", actor=actor, gid=vehicle_id, result=result)
         self.publish_desktop_state(force=True)
         return result
 
+    def command_set_framing(self, mode: str, *, actor: str = "Desktop") -> bool:
+        if mode not in {"wide", "medium", "close"}:
+            self.telemetry_logger.log("control_set_framing_rejected", actor=actor, mode=mode)
+            self.status_var.set(f"Status: {actor} requested unsupported framing: {mode or '--'}")
+            self.publish_desktop_state(force=True)
+            return False
+        self.framing_var.set(mode)
+        self.reframer.set_framing_mode(mode)
+        self.telemetry_logger.log("control_set_framing", actor=actor, mode=mode)
+        self.status_var.set(f"Status: {actor} set framing: {mode}")
+        self.publish_desktop_state(force=True)
+        return True
+
     def command_stop_motor(self, *, actor: str = "Desktop", reason: str | None = None) -> None:
+        self.telemetry_logger.log("control_stop_motor", actor=actor, reason=reason)
         self._disable_iphone_motor_tracking(reason or f"{actor} STOP")
         self.status_var.set(f"Status: {actor} requested motor stop")
         self.publish_desktop_state(force=True)
@@ -478,4 +514,3 @@ class CommandsMixin:
             config.iou_threshold,
             config.vehicle_classes_only,
         )
-

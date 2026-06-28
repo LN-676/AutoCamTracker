@@ -240,7 +240,7 @@ struct ContentView: View {
     }
 
     private func prepareServices() async {
-        cameraSession.onJPEGFrame = { [weak networkClient, weak dockKitManager] data in
+        cameraSession.onJPEGFrame = { [weak networkClient, weak dockKitManager, weak controlService, weak cameraSession] data in
             Task { @MainActor in
                 guard let networkClient else { return }
                 await networkClient.sendCameraFrame(data)
@@ -249,7 +249,12 @@ struct ContentView: View {
                         docked: dockKitManager.isDocked,
                         manualReady: dockKitManager.isManualControlReady,
                         systemTrackingEnabled: dockKitManager.isSystemTrackingEnabled,
-                        lastError: dockKitManager.lastError
+                        lastError: dockKitManager.lastError,
+                        currentVelocity: controlService?.currentVelocity,
+                        lastCommand: networkClient.lastCommand,
+                        lastStopReason: controlService?.lastStopReason,
+                        cameraZoomFactor: cameraSession.map { Double($0.zoomFactor) },
+                        cameraDisplayZoomFactor: cameraSession.map { Double($0.displayZoomFactor) }
                     )
                 }
             }
@@ -271,7 +276,12 @@ struct ContentView: View {
             docked: dockKitManager.isDocked,
             manualReady: dockKitManager.isManualControlReady,
             systemTrackingEnabled: dockKitManager.isSystemTrackingEnabled,
-            lastError: dockKitManager.lastError
+            lastError: dockKitManager.lastError,
+            currentVelocity: controlService.currentVelocity,
+            lastCommand: networkClient.lastCommand,
+            lastStopReason: controlService.lastStopReason,
+            cameraZoomFactor: Double(cameraSession.zoomFactor),
+            cameraDisplayZoomFactor: Double(cameraSession.displayZoomFactor)
         )
     }
 }

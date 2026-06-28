@@ -1,6 +1,6 @@
 import Foundation
 
-struct GimbalVelocity: Equatable, Sendable {
+struct GimbalVelocity: Codable, Equatable, Sendable {
     var yaw: Double
     var pitch: Double
     var roll: Double

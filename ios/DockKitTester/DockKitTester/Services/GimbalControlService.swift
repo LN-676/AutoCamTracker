@@ -94,6 +94,8 @@ final class GimbalControlService: ObservableObject {
             calculator.reset()
             if currentVelocity != .zero {
                 await emergencyStop(reason: "target unavailable or confidence below safety threshold")
+            } else {
+                lastStopReason = "target unavailable or confidence below safety threshold"
             }
             return
         }
@@ -102,10 +104,26 @@ final class GimbalControlService: ObservableObject {
         let generation = commandGeneration
         let velocity = calculator.velocity(for: trackingCommand)
         currentVelocity = velocity
+        lastStopReason = nil
         if let reason = calculator.safetyStopReason {
             await emergencyStop(reason: reason)
             return
         }
+
+        logger.log(
+            .info,
+            String(
+                format: "Tracking velocity: seq=%lld target=%d error=(%.3f, %.3f) confidence=%.2f velocity=(yaw %.3f, pitch %.3f, roll %.3f).",
+                trackingCommand.sequence ?? -1,
+                trackingCommand.targetId ?? -1,
+                trackingCommand.errorX,
+                trackingCommand.errorY,
+                trackingCommand.confidence,
+                velocity.yaw,
+                velocity.pitch,
+                velocity.roll
+            )
+        )
 
         await dockKitManager.setAngularVelocity(
             yaw: velocity.yaw,

@@ -49,7 +49,12 @@ final class TrackingCommandTests: XCTestCase {
             manualReady: true,
             systemTrackingEnabled: false,
             lastError: nil,
-            timestampMs: 123
+            timestampMs: 123,
+            currentVelocity: GimbalVelocity(yaw: 0.1, pitch: -0.2, roll: 0),
+            lastCommand: makeCommand(sequence: 9, confidence: 0.8),
+            lastStopReason: nil,
+            cameraZoomFactor: 1.0,
+            cameraDisplayZoomFactor: 1.2
         )
 
         let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(message)) as? [String: Any]
@@ -58,6 +63,10 @@ final class TrackingCommandTests: XCTestCase {
         XCTAssertEqual(object?["manual_ready"] as? Bool, true)
         XCTAssertEqual(object?["system_tracking_enabled"] as? Bool, false)
         XCTAssertEqual(object?["timestamp_ms"] as? Int, 123)
+        XCTAssertNotNil(object?["current_velocity"] as? [String: Any])
+        XCTAssertNotNil(object?["last_command"] as? [String: Any])
+        XCTAssertEqual(object?["camera_zoom_factor"] as? Double, 1.0)
+        XCTAssertEqual(object?["camera_display_zoom_factor"] as? Double, 1.2)
     }
 
     func testDecodesDesktopStatePayload() throws {

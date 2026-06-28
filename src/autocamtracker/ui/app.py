@@ -37,6 +37,7 @@ from autocamtracker.tracking.feature_gallery import FeatureGallery
 from autocamtracker.core.frame_data import FrameData
 from autocamtracker.tracking.identity_manager import GlobalIdentityManager
 from autocamtracker.core.pipeline_processor import PipelineProcessor
+from autocamtracker.core.telemetry_logger import TelemetryLogger
 from autocamtracker.core.pipeline_worker import TrackingWorker
 from autocamtracker.vision.reframer import FramingConfig, Reframer
 from autocamtracker.vision.scene_cut import SceneCutDetector
@@ -52,6 +53,7 @@ class AppConfig:
     output_width: int = 640
     output_height: int = 360
     log_dir: Path = Path("outputs")
+    telemetry_dir: Path = Path("outputs") / "telemetry"
     identity_db_path: Path = Path("outputs") / "vehicle_identity.sqlite3"
     model_dir: Path = Path(__file__).resolve().parents[3] / "code" / "model"
     default_model: str = "yolo26s.pt"
@@ -86,6 +88,7 @@ class AutoCamTrackerApp(UIBuilderMixin, IdentityPanelMixin, VideoPipelineMixin, 
         )
         self.auto_feature_sampler = AutoFeatureSampler(self.feature_gallery)
         self.scene_cut_detector = SceneCutDetector()
+        self.telemetry_logger = TelemetryLogger(self.config.telemetry_dir)
         self.reframer = Reframer(
             FramingConfig(
                 output_width=self.config.output_width,
@@ -103,6 +106,12 @@ class AutoCamTrackerApp(UIBuilderMixin, IdentityPanelMixin, VideoPipelineMixin, 
         self.tracking_server = TrackingWebSocketServer(
             on_status=self._queue_iphone_status,
             on_control=self._queue_iphone_control,
+            telemetry_logger=self.telemetry_logger,
+        )
+        self.telemetry_logger.log(
+            "app_started",
+            version=self.config.window_title,
+            telemetry_path=self.telemetry_logger.path,
         )
         self.track_shot_controller = TrackShotController()
         # Physical motor output is explicitly armed by Auto Track or Find GID.
@@ -140,6 +149,7 @@ class AutoCamTrackerApp(UIBuilderMixin, IdentityPanelMixin, VideoPipelineMixin, 
         self.identity_preview_vehicle_id: int | None = None
         self.auto_feature_status_message = ""
         self.last_desktop_state_publish_at = 0.0
+        self.last_frame_telemetry_at = 0.0
 
         self.before_image_ref = None
         self.after_image_ref = None

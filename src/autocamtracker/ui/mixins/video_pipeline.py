@@ -118,11 +118,55 @@ class VideoPipelineMixin:
         )
         if motor_output_active:
             self.tracking_server.publish_frame(frame_data, frame.shape)
+        elif (
+            self.input_config.source_type == "iphone"
+            and self.iphone_motor_tracking_enabled
+            and shot_decision.reason in {"target unavailable", "target temporarily lost"}
+        ):
+            self._disable_iphone_motor_tracking(shot_decision.reason)
         else:
             self.tracking_server.publish_stop()
+        self._log_frame_telemetry(frame_data, frame.shape, shot_decision, motor_output_active)
         self._run_auto_feature_sampling(frame)
         self.refresh_identity_db_panel(force=False)
         self.publish_desktop_state(force=False)
+
+    def _log_frame_telemetry(self, frame_data: FrameData, frame_shape, shot_decision, motor_output_active: bool) -> None:
+        now = time()
+        if now - self.last_frame_telemetry_at < 0.5:
+            return
+        self.last_frame_telemetry_at = now
+        selected_target = frame_data.selected_targets[0] if frame_data.selected_targets else None
+        frame_h, frame_w = frame_shape[:2]
+        target_locked = (
+            frame_data.tracking_status == "tracking"
+            and selected_target is not None
+            and selected_target.status == "tracking"
+            and selected_target.lost_frame_count == 0
+        )
+        self.telemetry_logger.log(
+            "frame_state",
+            tracking_status=frame_data.tracking_status,
+            target_locked=target_locked,
+            selected_gid=frame_data.selected_global_vehicle_id,
+            selected_lid=frame_data.selected_local_track_id,
+            lost_frames=frame_data.lost_frames,
+            candidate_count=len(frame_data.candidates),
+            confidence=float(selected_target.confidence) if selected_target is not None else 0.0,
+            bbox=selected_target.bbox if selected_target is not None else None,
+            target_center=selected_target.center if selected_target is not None else None,
+            frame_width=frame_w,
+            frame_height=frame_h,
+            framing_mode=self.framing_var.get(),
+            crop_window=frame_data.framing_status.crop_window,
+            error_x=frame_data.framing_status.error_x,
+            error_y=frame_data.framing_status.error_y,
+            shot_state=shot_decision.state,
+            shot_reason=shot_decision.reason,
+            motor_armed=self.iphone_motor_tracking_enabled,
+            motor_ready=self.tracking_server.motor_ready,
+            motor_output_active=motor_output_active,
+        )
 
     def _render_current_video_frame(self) -> None:
         if self.detector is None:
@@ -436,6 +480,10 @@ class VideoPipelineMixin:
                 "error_x": max(-1.0, min(1.0, float(error_x))),
                 "error_y": max(-1.0, min(1.0, float(error_y))),
                 "confidence": float(selected_target.confidence) if selected_target is not None else 0.0,
+                "lost_frames": int(frame_data.lost_frames) if frame_data is not None else 0,
+                "candidate_count": len(frame_data.candidates) if frame_data is not None else 0,
+                "bbox": selected_target.bbox if selected_target is not None else None,
+                "target_center": selected_target.center if selected_target is not None else None,
             },
             "motor": {
                 "armed": bool(self.iphone_motor_tracking_enabled),
@@ -447,6 +495,19 @@ class VideoPipelineMixin:
                     motor_status.system_tracking_enabled if motor_status is not None else None
                 ),
                 "last_error": motor_status.last_error if motor_status is not None else None,
+                "current_velocity": motor_status.current_velocity if motor_status is not None else None,
+                "last_command": motor_status.last_command if motor_status is not None else None,
+                "last_stop_reason": motor_status.last_stop_reason if motor_status is not None else None,
+                "camera_zoom_factor": motor_status.camera_zoom_factor if motor_status is not None else None,
+                "camera_display_zoom_factor": (
+                    motor_status.camera_display_zoom_factor if motor_status is not None else None
+                ),
+            },
+            "framing": {
+                "mode": self.framing_var.get(),
+                "crop_window": frame_data.framing_status.crop_window if frame_data is not None else None,
+                "error_x": frame_data.framing_status.error_x if frame_data is not None else 0.0,
+                "error_y": frame_data.framing_status.error_y if frame_data is not None else 0.0,
             },
             "gids": self._desktop_state_gids(),
         }

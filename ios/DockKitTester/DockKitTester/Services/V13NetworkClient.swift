@@ -135,9 +135,9 @@ final class V13NetworkClient: ObservableObject {
         }
     }
 
-    func sendControl(action: String, source: String? = nil, gid: Int? = nil) async {
+    func sendControl(action: String, source: String? = nil, gid: Int? = nil, framing: String? = nil) async {
         guard let socketTask, status != .offline, status != .failed else { return }
-        let message = ControlMessage(action: action, source: source, gid: gid)
+        let message = ControlMessage(action: action, source: source, gid: gid, framing: framing)
         do {
             let data = try JSONEncoder().encode(message)
             guard let text = String(data: data, encoding: .utf8) else { return }
@@ -180,7 +180,12 @@ final class V13NetworkClient: ObservableObject {
         docked: Bool,
         manualReady: Bool,
         systemTrackingEnabled: Bool?,
-        lastError: String?
+        lastError: String?,
+        currentVelocity: GimbalVelocity? = nil,
+        lastCommand: TrackingCommand? = nil,
+        lastStopReason: String? = nil,
+        cameraZoomFactor: Double? = nil,
+        cameraDisplayZoomFactor: Double? = nil
     ) async {
         guard let socketTask, status != .offline, status != .failed else { return }
         let message = MotorStatusMessage(
@@ -188,7 +193,12 @@ final class V13NetworkClient: ObservableObject {
             manualReady: manualReady,
             systemTrackingEnabled: systemTrackingEnabled,
             lastError: lastError,
-            timestampMs: Int64(Date().timeIntervalSince1970 * 1_000)
+            timestampMs: Int64(Date().timeIntervalSince1970 * 1_000),
+            currentVelocity: currentVelocity,
+            lastCommand: lastCommand,
+            lastStopReason: lastStopReason,
+            cameraZoomFactor: cameraZoomFactor,
+            cameraDisplayZoomFactor: cameraDisplayZoomFactor
         )
         do {
             let data = try JSONEncoder().encode(message)

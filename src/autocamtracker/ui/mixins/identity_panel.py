@@ -193,20 +193,48 @@ class IdentityPanelMixin:
         self.refresh_identity_db_panel()
         if identity is None:
             self._disable_iphone_motor_tracking("Find GID failed")
+            self.telemetry_logger.log(
+                "find_gid_result",
+                actor=actor,
+                gid=vehicle_id,
+                found=False,
+                score=score,
+                motor_armed=False,
+            )
             self._set_identity_mode(f"GID {vehicle_id} was not found")
             self.status_var.set(f"Status: {actor} vehicle id {vehicle_id} was not found in Identity DB")
             return "break"
 
         label = self.identity_store.display_label(vehicle_id)
-        motor_note = self._enable_iphone_motor_tracking("Find GID")
         if identity.last_track_id is None:
+            self._disable_iphone_motor_tracking("Find GID target unavailable")
+            self.telemetry_logger.log(
+                "find_gid_result",
+                actor=actor,
+                gid=vehicle_id,
+                found=True,
+                local_track_id=None,
+                score=score,
+                motor_armed=False,
+                reason="target unavailable",
+            )
             self._set_identity_mode(f"Find GID searching for GID {label}")
             self.status_var.set(
                 f"Status: {actor} no Master feature match for GID {label}; searching "
-                f"(score {score:.2f}); {motor_note}"
+                f"(score {score:.2f}); motor stopped until target is visible"
             )
         else:
             self.identity_session_links.link(identity.last_track_id, vehicle_id)
+            motor_note = self._enable_iphone_motor_tracking("Find GID")
+            self.telemetry_logger.log(
+                "find_gid_result",
+                actor=actor,
+                gid=vehicle_id,
+                found=True,
+                local_track_id=identity.last_track_id,
+                score=score,
+                motor_armed=True,
+            )
             self._set_identity_mode(f"Find GID tracking GID {label}")
             self.status_var.set(
                 f"Status: {actor} tracking GID {label} on local track {identity.last_track_id} "
@@ -554,4 +582,3 @@ class IdentityPanelMixin:
     @staticmethod
     def _set_button_enabled(button, enabled: bool) -> None:
         button.state(["!disabled"] if enabled else ["disabled"])
-

@@ -89,12 +89,20 @@ class TrackingMessageTests(unittest.TestCase):
                     "system_tracking_enabled": False,
                     "last_error": None,
                     "timestamp_ms": 123,
+                    "current_velocity": {"yaw": 0.1, "pitch": -0.2, "roll": 0.0},
+                    "last_command": {"sequence": 9, "target_locked": True},
+                    "last_stop_reason": None,
+                    "camera_zoom_factor": 1.0,
+                    "camera_display_zoom_factor": 1.2,
                 }
             )
         )
 
         self.assertTrue(server.motor_ready)
         self.assertEqual(server.motor_status.timestamp_ms, 123)
+        self.assertEqual(server.motor_status.current_velocity["yaw"], 0.1)
+        self.assertEqual(server.motor_status.last_command["sequence"], 9)
+        self.assertEqual(server.motor_status.camera_display_zoom_factor, 1.2)
 
     def test_control_message_is_routed_to_callback(self) -> None:
         received = []

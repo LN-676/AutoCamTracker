@@ -13,6 +13,8 @@ import threading
 from time import monotonic, time
 from typing import Any, Callable
 
+from autocamtracker.core.telemetry_logger import TelemetryLogger
+
 
 @dataclass(frozen=True)
 class TrackingServerConfig:
@@ -29,6 +31,11 @@ class MotorStatus:
     system_tracking_enabled: bool | None
     last_error: str | None
     timestamp_ms: int
+    current_velocity: dict[str, Any] | None = None
+    last_command: dict[str, Any] | None = None
+    last_stop_reason: str | None = None
+    camera_zoom_factor: float | None = None
+    camera_display_zoom_factor: float | None = None
 
     @property
     def ready(self) -> bool:
@@ -123,10 +130,12 @@ class TrackingWebSocketServer:
         config: TrackingServerConfig | None = None,
         on_status: Callable[[str], None] | None = None,
         on_control: Callable[[dict[str, Any]], None] | None = None,
+        telemetry_logger: TelemetryLogger | None = None,
     ) -> None:
         self.config = config or TrackingServerConfig()
         self.on_status = on_status
         self.on_control = on_control
+        self.telemetry_logger = telemetry_logger
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop_event: asyncio.Event | None = None
@@ -289,6 +298,8 @@ class TrackingWebSocketServer:
     def publish(self, payload: dict[str, Any]) -> None:
         if payload.get("type") == "desktop_state":
             self._latest_desktop_state = dict(payload)
+        if payload.get("type") in {"tracking", "desktop_state"}:
+            self._log("ws_send", payload=payload)
         loop = self._loop
         if loop is None or not loop.is_running():
             return
@@ -328,6 +339,7 @@ class TrackingWebSocketServer:
             return
 
         self._clients.add(websocket)
+        self._log("ws_client_connected", path=request_path, client_count=len(self._clients))
         self._notify(f"iPhone connected ({len(self._clients)})")
         await websocket.send(json.dumps(tracking_message(target_locked=False, sequence=self._sequence)))
         if self._latest_desktop_state is not None:
@@ -345,6 +357,7 @@ class TrackingWebSocketServer:
             if not self._clients:
                 with self._motor_status_lock:
                     self._latest_motor_status = None
+            self._log("ws_client_disconnected", client_count=len(self._clients))
             self._notify("iPhone disconnected" if not self._clients else f"iPhone connected ({len(self._clients)})")
 
     async def _broadcast(self, payload: dict[str, Any]) -> None:
@@ -365,7 +378,10 @@ class TrackingWebSocketServer:
             self._received_frame_count += 1
             first_frame = self._received_frame_count == 1
         if first_frame:
+            self._log("camera_frame_received", frame_bytes=len(data), frame_count=self._received_frame_count)
             self._notify("iPhone video receiving")
+        elif self._received_frame_count % 150 == 0:
+            self._log("camera_frame_received", frame_bytes=len(data), frame_count=self._received_frame_count)
 
     def _accept_text_message(self, message: str) -> None:
         try:
@@ -391,9 +407,15 @@ class TrackingWebSocketServer:
             system_tracking_enabled=payload.get("system_tracking_enabled"),
             last_error=str(payload["last_error"]) if payload.get("last_error") else None,
             timestamp_ms=int(payload.get("timestamp_ms", 0)),
+            current_velocity=_dict_or_none(payload.get("current_velocity")),
+            last_command=_dict_or_none(payload.get("last_command")),
+            last_stop_reason=str(payload["last_stop_reason"]) if payload.get("last_stop_reason") else None,
+            camera_zoom_factor=_float_or_none(payload.get("camera_zoom_factor")),
+            camera_display_zoom_factor=_float_or_none(payload.get("camera_display_zoom_factor")),
         )
         with self._motor_status_lock:
             self._latest_motor_status = status
+        self._log("motor_status", status=status)
         state = "motor ready" if status.ready else "motor not ready"
         if status.last_error:
             state = f"motor error: {status.last_error}"
@@ -403,9 +425,25 @@ class TrackingWebSocketServer:
         action = str(payload.get("action") or "").strip()
         if not action or self.on_control is None:
             return
+        self._log("ws_control", payload=payload)
         self.on_control(dict(payload))
         self._notify(f"iPhone control: {action}")
 
     def _notify(self, message: str) -> None:
         if self.on_status is not None:
             self.on_status(message)
+
+    def _log(self, event: str, **fields: Any) -> None:
+        if self.telemetry_logger is not None:
+            self.telemetry_logger.log(event, **fields)
+
+
+def _dict_or_none(value: Any) -> dict[str, Any] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
