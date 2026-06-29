@@ -269,6 +269,11 @@ class GlobalIdentityManager:
                 self.identity_store.update_vehicle(vehicle_id, best.detection, {"matched_by": "master_feature_gallery"})
             return identity, best.score
 
+        if self._should_preserve_selected_vehicle(vehicle_id):
+            self.last_reacquire_score = best.score if best is not None else self.last_reacquire_score
+            self._reset_auto_reid_pending()
+            return self.selected_identity, self.last_reacquire_score
+
         identity = VehicleIdentity(
             global_vehicle_id=vehicle_id,
             last_track_id=None,
@@ -290,6 +295,18 @@ class GlobalIdentityManager:
         self.reacquire.reset_pending()
         self._reset_auto_reid_pending()
         return identity, self.last_reacquire_score
+
+    def _should_preserve_selected_vehicle(self, vehicle_id: int) -> bool:
+        identity = self.selected_identity
+        return bool(
+            identity is not None
+            and identity.global_vehicle_id == vehicle_id
+            and identity.last_track_id is not None
+            and self.status == "tracking"
+            and identity.status in {"tracking", "coasting"}
+            and not self.camera_cut_seen
+            and identity.lost_frames <= self.predictive_coast_frames
+        )
 
     def handle_camera_cut(self) -> None:
         if self.selected_identity is None:

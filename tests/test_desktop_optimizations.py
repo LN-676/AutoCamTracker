@@ -13,11 +13,12 @@ if str(V1_DIR) not in sys.path:
     sys.path.insert(0, str(V1_DIR))
 
 from autocamtracker.core.desktop_state import IdentitySessionLinks
-from autocamtracker.tracking.feature_gallery import FeatureGallery
+from autocamtracker.tracking.feature_gallery import DetectionFeatureMatch, FeatureGallery
 from autocamtracker.tracking.identity_manager import GlobalIdentityManager
 from autocamtracker.core.pipeline_worker import TrackingWorker
 from autocamtracker.tracking.vehicle_identity_store import VehicleIdentityStore
 from autocamtracker.vision.detector import TrackedDetection
+from autocamtracker.vision.scene_cut import SceneCutDetector
 
 
 def detection(track_id: int = 12, frame_index: int = 1) -> TrackedDetection:
@@ -260,6 +261,35 @@ class ReIDRuntimeOptimizationTests(unittest.TestCase):
         self.assertEqual(manager.selected_global_vehicle_id, 1)
         self.assertEqual(manager.selected_local_track_id, 1)
 
+    def test_find_gid_low_score_preserves_active_local_track(self) -> None:
+        import numpy as np
+
+        class LowScoreGallery:
+            def rank_detections_for_vehicle(self, _vehicle_id, detections, _frame):
+                return [DetectionFeatureMatch(detection=detections[0], score=0.61, matches=[])]
+
+        frame = np.full((180, 260, 3), 90, dtype=np.uint8)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "identity.sqlite3"
+            store = VehicleIdentityStore(db_path)
+            vehicle_id = store.create_vehicle(detection(track_id=7, frame_index=1))
+            manager = GlobalIdentityManager(identity_store=store, feature_gallery=LowScoreGallery())  # type: ignore[arg-type]
+            manager.link_detection(vehicle_id, detection(track_id=7, frame_index=2), frame)
+
+            identity, score = manager.select_stored_vehicle(
+                vehicle_id,
+                [detection(track_id=11, frame_index=3)],
+                frame,
+                min_score=0.72,
+            )
+
+            self.assertIsNotNone(identity)
+            self.assertEqual(score, 0.61)
+            self.assertEqual(manager.status, "tracking")
+            self.assertEqual(manager.selected_global_vehicle_id, vehicle_id)
+            self.assertEqual(manager.selected_local_track_id, 7)
+            store.close()
+
     def test_auto_reid_can_lock_detection_without_local_track_id(self) -> None:
         import numpy as np
 
@@ -324,6 +354,35 @@ class ReIDRuntimeOptimizationTests(unittest.TestCase):
         self.assertEqual(manager.status, "tracking")
         self.assertEqual(targets[0].status, "tracking")
         self.assertEqual(targets[0].lost_frame_count, 1)
+
+
+class SceneCutDetectorTests(unittest.TestCase):
+    def test_scene_cut_requires_consecutive_low_correlation_frames(self) -> None:
+        import numpy as np
+
+        detector = SceneCutDetector(threshold=0.99, confirm_frames=2, cooldown_frames=0)
+        red = np.zeros((90, 160, 3), dtype=np.uint8)
+        green = np.zeros((90, 160, 3), dtype=np.uint8)
+        red[:] = (0, 0, 255)
+        green[:] = (0, 255, 0)
+
+        self.assertFalse(detector.update(red))
+        self.assertFalse(detector.update(green))
+        self.assertTrue(detector.update(red))
+
+    def test_scene_cut_cooldown_suppresses_repeated_resets(self) -> None:
+        import numpy as np
+
+        detector = SceneCutDetector(threshold=0.99, confirm_frames=1, cooldown_frames=2)
+        red = np.zeros((90, 160, 3), dtype=np.uint8)
+        green = np.zeros((90, 160, 3), dtype=np.uint8)
+        red[:] = (0, 0, 255)
+        green[:] = (0, 255, 0)
+
+        self.assertFalse(detector.update(red))
+        self.assertTrue(detector.update(green))
+        self.assertFalse(detector.update(red))
+        self.assertFalse(detector.update(green))
 
 
 if __name__ == "__main__":
