@@ -124,6 +124,8 @@ class UIBuilderMixin:
         self.iphone_copy_button.grid(row=2, column=1, sticky="ew", padx=4, pady=(4, 0))
         self.iphone_test_button = ttk.Button(source_controls, text="Test", width=7, command=self.send_iphone_test_pulse)
         self.iphone_test_button.grid(row=1, column=1, sticky="ew", padx=4, pady=(4, 0))
+        self.iphone_recenter_button = ttk.Button(source_controls, text="Recenter", command=self.send_iphone_recenter)
+        self.iphone_recenter_button.grid(row=3, column=0, columnspan=2, sticky="ew", padx=4, pady=(4, 0))
         source_controls.columnconfigure(0, weight=1)
         source_controls.columnconfigure(1, weight=1)
         self._update_source_controls()
@@ -480,6 +482,7 @@ class UIBuilderMixin:
             self.iphone_url_entry,
             self.iphone_copy_button,
             self.iphone_test_button,
+            self.iphone_recenter_button,
         )
         for widget in widgets:
             widget.grid_remove()
@@ -501,6 +504,7 @@ class UIBuilderMixin:
             self.iphone_url_entry.grid()
             self.iphone_copy_button.grid()
             self.iphone_test_button.grid()
+            self.iphone_recenter_button.grid()
 
     def refresh_model_options(self) -> None:
         model_files = self._discover_model_files()
@@ -693,4 +697,3 @@ class UIBuilderMixin:
         if hours:
             return f"{hours:02d}:{minutes:02d}:{secs:02d}"
         return f"{minutes:02d}:{secs:02d}"
-

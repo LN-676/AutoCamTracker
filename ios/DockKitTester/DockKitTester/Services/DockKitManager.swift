@@ -10,6 +10,8 @@ protocol DockKitMotorControlling: AnyObject {
     func setAngularVelocity(yaw: Double, pitch: Double, roll: Double) async
     func stop() async
     func recenter() async
+    func setHome() async
+    func returnHome() async
 }
 
 @MainActor
@@ -21,6 +23,7 @@ final class DockKitManager: ObservableObject, DockKitMotorControlling {
     @Published private(set) var isManualModeTransitioning = false
     @Published private(set) var isCapabilityTestRunning = false
     @Published private(set) var lastError: String?
+    @Published private(set) var hasHomePosition = false
 
     private let logger: AppLogger
     private var listeningTask: Task<Void, Never>?
@@ -256,6 +259,19 @@ final class DockKitManager: ObservableObject, DockKitMotorControlling {
             await stop()
         }
 #endif
+    }
+
+    func setHome() async {
+        hasHomePosition = true
+        logger.log(.success, "Home position set to DockKit origin / recenter target.")
+    }
+
+    func returnHome() async {
+        if !hasHomePosition {
+            await setHome()
+        }
+        logger.log(.info, "Returning gimbal to Home.")
+        await recenter()
     }
 
     func runCapabilityDiagnostics() async {

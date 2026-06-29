@@ -6,12 +6,20 @@ final class GimbalControlService: ObservableObject {
     @Published private(set) var currentVelocity = GimbalVelocity.zero
     @Published private(set) var calibration = GimbalCalibrationProfile.conservative
     @Published private(set) var lastStopReason: String?
+    @Published var lostAutoReturnEnabled = false
+    @Published private(set) var homeSet = false
+    @Published private(set) var autoReturnPaused = false
 
     private let dockKitManager: DockKitMotorControlling
     private let logger: AppLogger
     private var calculator = GimbalVelocityCalculator()
     private var commandGeneration = 0
+    private var lostStartedAt: Date?
+    private var stableLockCount = 0
+    private var autoReturnInFlight = false
     private let calibrationKey = "AutoCamTrackerGimbalCalibrationV164"
+    private let lostAutoReturnThreshold: TimeInterval = 1.0
+    private let stableLockRequiredCount = 5
 
     init(dockKitManager: DockKitMotorControlling, logger: AppLogger) {
         self.dockKitManager = dockKitManager
@@ -57,6 +65,12 @@ final class GimbalControlService: ObservableObject {
         logger.log(.info, "Tracking calibration reset to conservative defaults.")
     }
 
+    func setHome() async {
+        await dockKitManager.setHome()
+        homeSet = true
+        logger.log(.success, "Set Home / 設定初始位置 completed.")
+    }
+
     func execute(_ command: GimbalCommand) async {
         switch command {
         case .stop:
@@ -85,19 +99,39 @@ final class GimbalControlService: ObservableObject {
 
     func apply(_ trackingCommand: TrackingCommand) async {
         guard trackingCommand.type == "tracking" else {
-            logger.log(.error, "Ignored V1.64 message with unsupported type: \(trackingCommand.type).")
-            await emergencyStop(reason: "invalid V1.64 message")
+            logger.log(.error, "Ignored V1.65 message with unsupported type: \(trackingCommand.type).")
+            await emergencyStop(reason: "invalid V1.65 message")
             return
         }
 
         guard trackingCommand.isTrackable() else {
             calculator.reset()
+            stableLockCount = 0
+            if lostAutoReturnEnabled && !trackingCommand.targetLocked {
+                await handleLostAutoReturnTick()
+                return
+            }
+            lostStartedAt = nil
             if currentVelocity != .zero {
                 await emergencyStop(reason: "target unavailable or confidence below safety threshold")
             } else {
                 lastStopReason = "target unavailable or confidence below safety threshold"
             }
             return
+        }
+
+        lostStartedAt = nil
+        if autoReturnPaused {
+            stableLockCount += 1
+            currentVelocity = .zero
+            lastStopReason = "waiting for stable Find GID lock after auto return"
+            if stableLockCount < stableLockRequiredCount {
+                await dockKitManager.stop()
+                return
+            }
+            autoReturnPaused = false
+            stableLockCount = 0
+            logger.log(.success, "Stable Find GID lock restored; motor tracking resumed.")
         }
 
         commandGeneration += 1
@@ -151,10 +185,42 @@ final class GimbalControlService: ObservableObject {
     func emergencyStop(reason: String) async {
         commandGeneration += 1
         calculator.reset()
+        stableLockCount = 0
         currentVelocity = .zero
         lastStopReason = reason
         logger.log(.warning, "Safety stop: \(reason).")
         await dockKitManager.stop()
+    }
+
+    private func handleLostAutoReturnTick() async {
+        if lostStartedAt == nil {
+            lostStartedAt = Date()
+            if currentVelocity != .zero {
+                await emergencyStop(reason: "target lost; waiting before auto return")
+            } else {
+                lastStopReason = "target lost; waiting before auto return"
+            }
+            return
+        }
+        guard let lostStartedAt,
+              Date().timeIntervalSince(lostStartedAt) >= lostAutoReturnThreshold,
+              !autoReturnInFlight,
+              !autoReturnPaused else {
+            return
+        }
+
+        autoReturnInFlight = true
+        defer { autoReturnInFlight = false }
+        commandGeneration += 1
+        calculator.reset()
+        currentVelocity = .zero
+        stableLockCount = 0
+        lastStopReason = "lost auto return: STOP and return Home"
+        logger.log(.warning, "Lost Auto Return triggered after 1.0s unlocked.")
+        await dockKitManager.stop()
+        await dockKitManager.returnHome()
+        autoReturnPaused = true
+        logger.log(.info, "Motor tracking paused after Home; waiting for stable Find GID lock.")
     }
 
     private func updateCalibration(_ mutate: (inout GimbalCalibrationProfile) -> Void) {

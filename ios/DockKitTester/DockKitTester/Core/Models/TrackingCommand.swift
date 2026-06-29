@@ -17,6 +17,7 @@ struct TrackingCommand: Codable, Equatable, Sendable {
     let targetY: Double?
     let bboxWidth: Double?
     let bboxHeight: Double?
+    let zoomFactor: Double?
 
     init(
         type: String,
@@ -34,7 +35,8 @@ struct TrackingCommand: Codable, Equatable, Sendable {
         targetX: Double? = nil,
         targetY: Double? = nil,
         bboxWidth: Double? = nil,
-        bboxHeight: Double? = nil
+        bboxHeight: Double? = nil,
+        zoomFactor: Double? = nil
     ) {
         self.type = type
         self.version = version
@@ -52,6 +54,7 @@ struct TrackingCommand: Codable, Equatable, Sendable {
         self.targetY = targetY
         self.bboxWidth = bboxWidth
         self.bboxHeight = bboxHeight
+        self.zoomFactor = zoomFactor
     }
 
     enum CodingKeys: String, CodingKey {
@@ -68,6 +71,7 @@ struct TrackingCommand: Codable, Equatable, Sendable {
         case targetY = "target_y"
         case bboxWidth = "bbox_width"
         case bboxHeight = "bbox_height"
+        case zoomFactor = "zoom_factor"
     }
 
     func isTrackable(minimumConfidence: Double = 0.20) -> Bool {
@@ -139,9 +143,10 @@ struct DesktopState: Codable, Equatable, Sendable {
     let tracking: TrackingState
     let motor: MotorState
     let gids: [GIDState]
+    let framing: FramingState?
 
     enum CodingKeys: String, CodingKey {
-        case type, version, source, running, tracking, motor, gids
+        case type, version, source, running, tracking, motor, framing, gids
         case sourceVersion = "source_version"
         case timestampMs = "timestamp_ms"
     }
@@ -199,6 +204,22 @@ struct DesktopState: Codable, Equatable, Sendable {
             case lastStopReason = "last_stop_reason"
             case cameraZoomFactor = "camera_zoom_factor"
             case cameraDisplayZoomFactor = "camera_display_zoom_factor"
+        }
+    }
+
+    struct FramingState: Codable, Equatable, Sendable {
+        let mode: String
+        let cropWindow: [Double]?
+        let errorX: Double
+        let errorY: Double
+        let zoomFactor: Double?
+
+        enum CodingKeys: String, CodingKey {
+            case mode
+            case cropWindow = "crop_window"
+            case errorX = "error_x"
+            case errorY = "error_y"
+            case zoomFactor = "zoom_factor"
         }
     }
 

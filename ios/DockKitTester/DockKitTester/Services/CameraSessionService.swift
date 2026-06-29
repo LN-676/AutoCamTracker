@@ -53,6 +53,7 @@ final class CameraSessionService: ObservableObject {
     private let sessionQueue = DispatchQueue(label: "com.linen.DockKitTester.camera-session")
     private let capture = CaptureSessionBox()
     private var orientationObserver: AnyCancellable?
+    private var lastTrackingZoomUpdate = Date.distantPast
 
     init(logger: AppLogger) {
         self.logger = logger
@@ -121,6 +122,21 @@ final class CameraSessionService: ObservableObject {
 
     func setDisplayZoom(_ requestedFactor: CGFloat) {
         setZoom(requestedFactor / max(displayZoomFactorMultiplier, 0.01))
+    }
+
+    func applyTrackingDisplayZoom(_ requestedFactor: Double?) {
+        guard let requestedFactor, requestedFactor.isFinite else { return }
+        let displayFactor = CGFloat(requestedFactor)
+        let clampedDisplayFactor = min(max(displayFactor, minimumDisplayZoomFactor), maximumDisplayZoomFactor)
+        guard abs(clampedDisplayFactor - displayZoomFactor) >= 0.08 else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastTrackingZoomUpdate) >= 0.35 else { return }
+        lastTrackingZoomUpdate = now
+        logger.log(
+            .info,
+            String(format: "Tracking zoom request: display %.2f -> %.2f.", Double(requestedFactor), Double(clampedDisplayFactor))
+        )
+        setZoomSmooth(clampedDisplayFactor / max(displayZoomFactorMultiplier, 0.01))
     }
 
     func focus(at devicePoint: CGPoint) {
@@ -226,6 +242,36 @@ final class CameraSessionService: ObservableObject {
                     continuation.resume()
                 } catch {
                     continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func setZoomSmooth(_ requestedFactor: CGFloat) {
+        let factor = min(max(requestedFactor, minimumZoomFactor), maximumZoomFactor)
+        zoomFactor = factor
+        let capture = capture
+        sessionQueue.async {
+            guard let camera = capture.camera else {
+                Task { @MainActor [weak self] in
+                    self?.logger.log(.warning, "Tracking zoom skipped: camera is unavailable.")
+                }
+                return
+            }
+            do {
+                try camera.lockForConfiguration()
+                let cameraFactor = min(
+                    max(factor, camera.minAvailableVideoZoomFactor),
+                    camera.maxAvailableVideoZoomFactor
+                )
+                camera.ramp(toVideoZoomFactor: cameraFactor, withRate: 2.0)
+                camera.unlockForConfiguration()
+                Task { @MainActor [weak self] in
+                    self?.logger.log(.success, String(format: "Tracking zoom ramp started: %.2f.", Double(cameraFactor)))
+                }
+            } catch {
+                Task { @MainActor [weak self] in
+                    self?.recordError("Camera tracking zoom failed: \(error.localizedDescription)")
                 }
             }
         }

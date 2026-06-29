@@ -364,6 +364,16 @@ class CommandsMixin:
         self.root.after(650, self.tracking_server.publish_stop)
         self.status_var.set("Status: sending 650 ms iPhone tracking test pulse")
 
+    def send_iphone_recenter(self) -> None:
+        self._start_iphone_link()
+        if self.tracking_server.client_count == 0:
+            self.status_var.set("Status: waiting for iPhone before recenter")
+            return
+        self.tracking_server.publish_stop()
+        self.tracking_server.publish_control("recenter")
+        self.telemetry_logger.log("desktop_recenter_requested")
+        self.status_var.set("Status: requested iPhone gimbal recenter")
+
     def apply_video_url(self, _event=None) -> None:
         video_url = self._normalized_video_url()
         if video_url is None:

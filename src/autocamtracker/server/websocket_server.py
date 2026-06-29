@@ -1,4 +1,4 @@
-"""WebSocket bridge from AutoCamTracker V1.64 to the DockKit iOS app."""
+"""WebSocket bridge from AutoCamTracker V1.65 to the DockKit iOS app."""
 
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ from time import monotonic, time
 from typing import Any, Callable
 
 from autocamtracker.core.telemetry_logger import TelemetryLogger
+
+SOURCE_VERSION = "1.65"
 
 
 @dataclass(frozen=True)
@@ -56,13 +58,14 @@ def tracking_message(
     target_y: float | None = None,
     bbox_width: float | None = None,
     bbox_height: float | None = None,
+    zoom_factor: float | None = None,
 ) -> dict[str, Any]:
     """Build the versioned wire message consumed by TrackingCommand.swift."""
 
     message = {
         "type": "tracking",
         "version": "1.0",
-        "source_version": "1.64",
+        "source_version": SOURCE_VERSION,
         "sequence": sequence,
         "target_locked": bool(target_locked),
         "target_id": target_id,
@@ -82,11 +85,13 @@ def tracking_message(
                 "bbox_height": max(0.0, min(1.0, float(bbox_height or 0.0))),
             }
         )
+    if zoom_factor is not None:
+        message["zoom_factor"] = max(0.1, min(10.0, float(zoom_factor)))
     return message
 
 
 def frame_tracking_message(frame_data, frame_shape, sequence: int = 0) -> dict[str, Any]:
-    """Convert V1.64 pixel-space framing status into normalized gimbal error."""
+    """Convert pixel-space framing status into normalized gimbal error."""
 
     frame_h, frame_w = frame_shape[:2]
     targets = frame_data.selected_targets
@@ -103,6 +108,11 @@ def frame_tracking_message(frame_data, frame_shape, sequence: int = 0) -> dict[s
 
     status = frame_data.framing_status
     bbox = fresh_target.bbox
+    bbox_width = (bbox[2] - bbox[0]) / max(1.0, frame_w)
+    target_ratio_by_mode = {"wide": 0.30, "medium": 0.48, "close": 0.68}
+    framing_mode = getattr(frame_data.framing_status, "framing_mode", "medium")
+    target_ratio = target_ratio_by_mode.get(framing_mode, 0.48)
+    zoom_factor = target_ratio / max(0.01, bbox_width)
     target_id = frame_data.selected_global_vehicle_id
     if target_id is None:
         target_id = frame_data.selected_local_track_id
@@ -117,8 +127,9 @@ def frame_tracking_message(frame_data, frame_shape, sequence: int = 0) -> dict[s
         frame_height=frame_h,
         target_x=fresh_target.center[0] / max(1.0, frame_w),
         target_y=fresh_target.center[1] / max(1.0, frame_h),
-        bbox_width=(bbox[2] - bbox[0]) / max(1.0, frame_w),
+        bbox_width=bbox_width,
         bbox_height=(bbox[3] - bbox[1]) / max(1.0, frame_h),
+        zoom_factor=zoom_factor,
     )
 
 
@@ -279,6 +290,15 @@ class TrackingWebSocketServer:
     def publish_stop(self) -> None:
         self._sequence += 1
         self.publish(tracking_message(target_locked=False, sequence=self._sequence))
+
+    def publish_control(self, action: str) -> None:
+        self.publish(
+            {
+                "type": "control",
+                "action": action,
+                "timestamp_ms": int(time() * 1000),
+            }
+        )
 
     def read_latest_frame(self):
         """Decode and consume only the newest iPhone JPEG frame."""

@@ -24,7 +24,7 @@ class TrackingMessageTests(unittest.TestCase):
                 bbox=(400.0, 50.0, 560.0, 130.0),
             )],
             tracking_status="tracking",
-            framing_status=SimpleNamespace(error_x=160.0, error_y=-90.0),
+            framing_status=SimpleNamespace(error_x=160.0, error_y=-90.0, framing_mode="medium"),
             selected_global_vehicle_id=12,
             selected_local_track_id=7,
         )
@@ -40,6 +40,7 @@ class TrackingMessageTests(unittest.TestCase):
         self.assertEqual(message["frame_height"], 360)
         self.assertAlmostEqual(message["target_x"], 0.75)
         self.assertAlmostEqual(message["bbox_width"], 0.25)
+        self.assertAlmostEqual(message["zoom_factor"], 1.92)
 
     def test_lost_target_emits_stop(self) -> None:
         frame_data = SimpleNamespace(
@@ -75,7 +76,7 @@ class TrackingMessageTests(unittest.TestCase):
         self.assertEqual(message["error_x"], 1.0)
         self.assertEqual(message["error_y"], -1.0)
         self.assertEqual(message["confidence"], 1.0)
-        self.assertEqual(message["source_version"], "1.64")
+        self.assertEqual(message["source_version"], "1.65")
 
     def test_motor_status_reports_dockkit_readiness(self) -> None:
         server = TrackingWebSocketServer()

@@ -4,13 +4,13 @@ import XCTest
 
 final class TrackingCommandTests: XCTestCase {
     func testDecodesV143SnakeCasePayload() throws {
-        let json = #"{"type":"tracking","version":"1.0","source_version":"1.64","sequence":42,"target_locked":true,"target_id":7,"error_x":0.18,"error_y":-0.04,"confidence":0.91,"timestamp_ms":1781770000000}"#
+        let json = #"{"type":"tracking","version":"1.0","source_version":"1.65","sequence":42,"target_locked":true,"target_id":7,"error_x":0.18,"error_y":-0.04,"confidence":0.91,"timestamp_ms":1781770000000,"zoom_factor":2.4}"#
 
         let command = try JSONDecoder().decode(TrackingCommand.self, from: Data(json.utf8))
 
         XCTAssertEqual(command.type, "tracking")
         XCTAssertEqual(command.version, "1.0")
-        XCTAssertEqual(command.sourceVersion, "1.64")
+        XCTAssertEqual(command.sourceVersion, "1.65")
         XCTAssertEqual(command.sequence, 42)
         XCTAssertTrue(command.targetLocked)
         XCTAssertEqual(command.targetId, 7)
@@ -18,6 +18,7 @@ final class TrackingCommandTests: XCTestCase {
         XCTAssertEqual(command.errorY, -0.04)
         XCTAssertEqual(command.confidence, 0.91)
         XCTAssertEqual(command.timestampMs, 1_781_770_000_000)
+        XCTAssertEqual(command.zoomFactor, 2.4)
     }
 
     func testSafeDecoderReturnsFailureForMissingFields() {
@@ -74,7 +75,7 @@ final class TrackingCommandTests: XCTestCase {
         {
           "type": "desktop_state",
           "version": "1.0",
-          "source_version": "1.64",
+          "source_version": "1.65",
           "timestamp_ms": 1781770000000,
           "source": "iphone",
           "running": true,
@@ -96,6 +97,13 @@ final class TrackingCommandTests: XCTestCase {
             "manual_ready": true,
             "system_tracking_enabled": true,
             "last_error": null
+          },
+          "framing": {
+            "mode": "medium",
+            "crop_window": [10, 20, 320, 180],
+            "error_x": 12.5,
+            "error_y": -8.0,
+            "zoom_factor": 2.4
           },
           "gids": [
             {
@@ -124,6 +132,8 @@ final class TrackingCommandTests: XCTestCase {
         XCTAssertEqual(state.tracking.selectedGid, 12)
         XCTAssertTrue(state.motor.armed)
         XCTAssertFalse(state.motor.ready)
+        XCTAssertEqual(state.framing?.mode, "medium")
+        XCTAssertEqual(state.framing?.zoomFactor, 2.4)
         XCTAssertEqual(state.gids.first?.gid, 12)
         XCTAssertTrue(state.gids.first?.trackable == true)
     }

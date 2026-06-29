@@ -103,7 +103,8 @@ class VideoPipelineMixin:
         
         if frame_data.camera_cut_detected:
             self._stop_auto_feature_capture_for_scene_change()
-        self._update_images(frame_data.before_frame, frame_data.after_frame)
+        after_view_frame = frame_data.raw_frame if self.input_config.source_type == "iphone" else frame_data.after_frame
+        self._update_images(frame_data.before_frame, after_view_frame)
         self.current_frame_data = frame_data
         
         shot_decision = self.track_shot_controller.evaluate(frame_data, frame.shape)
@@ -455,11 +456,19 @@ class VideoPipelineMixin:
                 error_x = frame_data.framing_status.error_x / max(1.0, frame_w / 2.0)
                 error_y = frame_data.framing_status.error_y / max(1.0, frame_h / 2.0)
         fresh_target = selected_target if target_locked else None
+        zoom_factor = None
+        if fresh_target is not None and self.last_frame_shape is not None:
+            frame_h, frame_w = self.last_frame_shape[:2]
+            bbox = fresh_target.bbox
+            bbox_width = (bbox[2] - bbox[0]) / max(1.0, frame_w)
+            target_ratio_by_mode = {"wide": 0.30, "medium": 0.48, "close": 0.68}
+            target_ratio = target_ratio_by_mode.get(self.framing_var.get(), 0.48)
+            zoom_factor = max(0.1, min(10.0, target_ratio / max(0.01, bbox_width)))
 
         return {
             "type": "desktop_state",
             "version": "1.0",
-            "source_version": "1.64",
+            "source_version": "1.65",
             "timestamp_ms": int(time() * 1000),
             "source": self.source_var.get(),
             "running": bool(self.running),
@@ -510,6 +519,7 @@ class VideoPipelineMixin:
                 "crop_window": frame_data.framing_status.crop_window if frame_data is not None else None,
                 "error_x": frame_data.framing_status.error_x if frame_data is not None else 0.0,
                 "error_y": frame_data.framing_status.error_y if frame_data is not None else 0.0,
+                "zoom_factor": zoom_factor,
             },
             "gids": self._desktop_state_gids(),
         }

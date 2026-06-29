@@ -43,6 +43,9 @@ struct ContentView: View {
         .onChange(of: dockKitManager.lastError) { _, _ in
             Task { await publishMotorStatus() }
         }
+        .onChange(of: networkClient.desktopState?.framing?.zoomFactor) { _, newValue in
+            cameraSession.applyTrackingDisplayZoom(newValue)
+        }
     }
 
     private var cameraTab: some View {
@@ -50,6 +53,7 @@ struct ContentView: View {
             CameraControlPage(
                 cameraSession: cameraSession,
                 dockKitManager: dockKitManager,
+                controlService: controlService,
                 networkClient: networkClient
             )
             .navigationTitle("AutoCam Camera")
@@ -259,11 +263,20 @@ struct ContentView: View {
                 }
             }
         }
-        networkClient.onCommand = { [weak controlService] command in
+        networkClient.onCommand = { [weak controlService, weak cameraSession] command in
+            cameraSession?.applyTrackingDisplayZoom(command.zoomFactor)
             await controlService?.apply(command)
         }
+        networkClient.onControl = { [weak controlService] message in
+            switch message.action {
+            case "recenter":
+                await controlService?.execute(.recenter)
+            default:
+                break
+            }
+        }
         networkClient.onTimeout = { [weak controlService] in
-            await controlService?.emergencyStop(reason: "V1.64 timeout or disconnect")
+            await controlService?.emergencyStop(reason: "V1.65 timeout or disconnect")
         }
         await cameraSession.start()
         await dockKitManager.startListening()
@@ -289,6 +302,7 @@ struct ContentView: View {
 private struct CameraControlPage: View {
     @ObservedObject var cameraSession: CameraSessionService
     @ObservedObject var dockKitManager: DockKitManager
+    @ObservedObject var controlService: GimbalControlService
     @ObservedObject var networkClient: V13NetworkClient
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var selectedRemoteGID: Int?
@@ -363,6 +377,7 @@ private struct CameraControlPage: View {
         VStack(spacing: 14) {
             remoteStatusPanel
             remoteCommandRow
+            homeReturnControls
             gidControlPanel
             zoomControls
         }
@@ -421,6 +436,48 @@ private struct CameraControlPage: View {
             .buttonStyle(RemoteCommandButtonStyle(tint: .green, prominent: false))
             .disabled(!networkActive || selectedGID == nil)
         }
+    }
+
+    private var homeReturnControls: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                Button {
+                    Task { await controlService.setHome() }
+                } label: {
+                    Label("Set Home", systemImage: "house.fill")
+                }
+                .buttonStyle(RemoteCommandButtonStyle(tint: .cyan, prominent: false))
+                .disabled(!dockKitManager.isManualControlReady)
+
+                Toggle(
+                    "Lost Auto Return",
+                    isOn: Binding(
+                        get: { controlService.lostAutoReturnEnabled },
+                        set: { controlService.lostAutoReturnEnabled = $0 }
+                    )
+                )
+                .toggleStyle(.switch)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            HStack {
+                Label(
+                    controlService.homeSet || dockKitManager.hasHomePosition ? "Home ready / 初始位置已設定" : "設定初始位置",
+                    systemImage: controlService.homeSet || dockKitManager.hasHomePosition ? "checkmark.circle.fill" : "house"
+                )
+                Spacer()
+                if controlService.autoReturnPaused {
+                    Text("Paused")
+                        .fontWeight(.bold)
+                        .foregroundStyle(.orange)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.72))
+        }
+        .padding(.vertical, 2)
     }
 
     private var gidControlPanel: some View {
@@ -499,6 +556,9 @@ private struct CameraControlPage: View {
                 Spacer()
                 Text("目前 \(formatZoom(cameraSession.displayZoomFactor))")
                     .fontWeight(.semibold)
+                if let zoom = networkClient.lastCommand?.zoomFactor {
+                    Text("目標 \(formatZoom(CGFloat(zoom)))")
+                }
             }
             .font(.caption)
             .foregroundStyle(.white.opacity(0.75))
