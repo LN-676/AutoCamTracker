@@ -350,11 +350,25 @@ class UIBuilderMixin:
         ttk.Label(views, text="Before · Detection", style="PreviewTitle.TLabel").grid(row=0, column=0, pady=(2, 0))
         ttk.Label(views, text="After · Reframe", style="PreviewTitle.TLabel").grid(row=0, column=1, pady=(2, 0))
 
-        self.before_canvas = tk.Canvas(views, background="#202124", borderwidth=0, highlightthickness=0)
+        self.before_canvas = tk.Canvas(
+            views,
+            background="#202124",
+            borderwidth=0,
+            highlightthickness=0,
+            width=self.display_width,
+            height=self.display_height,
+        )
         self.before_canvas.grid(row=1, column=0, padx=(2, 4), pady=4, sticky="nsew")
         self.before_canvas.bind("<Button-1>", self.on_before_click)
 
-        self.after_canvas = tk.Canvas(views, background="#202124", borderwidth=0, highlightthickness=0)
+        self.after_canvas = tk.Canvas(
+            views,
+            background="#202124",
+            borderwidth=0,
+            highlightthickness=0,
+            width=self.display_width,
+            height=self.display_height,
+        )
         self.after_canvas.grid(row=1, column=1, padx=(4, 2), pady=4, sticky="nsew")
 
         timeline = ttk.Frame(views)
@@ -374,7 +388,13 @@ class UIBuilderMixin:
         ttk.Label(timeline, textvariable=self.timeline_label_var, width=16).grid(row=0, column=1, padx=(8, 0))
 
         self.status_var = tk.StringVar(value="Status: idle")
-        ttk.Label(main, textvariable=self.status_var).grid(row=2, column=0, columnspan=2, sticky="w")
+        self.status_label = ttk.Label(
+            main,
+            textvariable=self.status_var,
+            anchor="w",
+            width=1,
+        )
+        self.status_label.grid(row=2, column=0, columnspan=2, sticky="ew")
         self.refresh_identity_db_panel()
         self._update_transport_actions()
 

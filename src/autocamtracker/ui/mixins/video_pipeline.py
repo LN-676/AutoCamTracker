@@ -29,6 +29,7 @@ from autocamtracker.vision.reframer import FramingConfig, Reframer
 from autocamtracker.vision.scene_cut import SceneCutDetector
 from autocamtracker.server.websocket_server import (
     CENTER_ZOOM_FACTOR,
+    SOURCE_VERSION,
     TrackingWebSocketServer,
     zoom_factor_for_framing,
 )
@@ -333,6 +334,9 @@ class VideoPipelineMixin:
 
         self.display_width = width
         self.display_height = height
+        if hasattr(self, "before_canvas"):
+            self.before_canvas.configure(width=width, height=height)
+            self.after_canvas.configure(width=width, height=height)
         return True
 
     def _sync_reframer_to_source_size(
@@ -486,7 +490,7 @@ class VideoPipelineMixin:
         return {
             "type": "desktop_state",
             "version": "1.0",
-            "source_version": "1.651",
+            "source_version": SOURCE_VERSION,
             "timestamp_ms": int(time() * 1000),
             "source": self.source_var.get(),
             "running": bool(self.running),
@@ -541,7 +545,7 @@ class VideoPipelineMixin:
                 "zoom_factor": zoom_factor,
             },
             "diagnostics": {
-                "desktop_version": "AutoCamTracker V1.651",
+                "desktop_version": f"AutoCamTracker V{SOURCE_VERSION}",
                 "phone_last_command_source_version": (
                     motor_status.last_command.get("source_version")
                     if motor_status is not None and isinstance(motor_status.last_command, dict)
@@ -609,23 +613,22 @@ class VideoPipelineMixin:
         self.after_image_ref = ImageTk.PhotoImage(after_image)
         
         if not hasattr(self, "before_image_id"):
-            self.before_canvas.update_idletasks()
-            cw = self.before_canvas.winfo_width()
-            ch = self.before_canvas.winfo_height()
-            self.before_image_id = self.before_canvas.create_image(cw // 2, ch // 2, anchor="center", image=self.before_image_ref)
-            
-            cw2 = self.after_canvas.winfo_width()
-            ch2 = self.after_canvas.winfo_height()
-            self.after_image_id = self.after_canvas.create_image(cw2 // 2, ch2 // 2, anchor="center", image=self.after_image_ref)
+            self.before_image_id = self.before_canvas.create_image(
+                0,
+                0,
+                anchor="nw",
+                image=self.before_image_ref,
+            )
+            self.after_image_id = self.after_canvas.create_image(
+                0,
+                0,
+                anchor="nw",
+                image=self.after_image_ref,
+            )
         else:
-            cw = self.before_canvas.winfo_width()
-            ch = self.before_canvas.winfo_height()
-            self.before_canvas.coords(self.before_image_id, cw // 2, ch // 2)
+            self.before_canvas.coords(self.before_image_id, 0, 0)
             self.before_canvas.itemconfig(self.before_image_id, image=self.before_image_ref)
-            
-            cw2 = self.after_canvas.winfo_width()
-            ch2 = self.after_canvas.winfo_height()
-            self.after_canvas.coords(self.after_image_id, cw2 // 2, ch2 // 2)
+            self.after_canvas.coords(self.after_image_id, 0, 0)
             self.after_canvas.itemconfig(self.after_image_id, image=self.after_image_ref)
 
 

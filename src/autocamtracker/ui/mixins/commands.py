@@ -459,10 +459,8 @@ class CommandsMixin:
         frame_height, frame_width = self.last_frame_shape[:2]
         image_width = max(1, self.rendered_image_width)
         image_height = max(1, self.rendered_image_height)
-        offset_x = max(0, (self.before_canvas.winfo_width() - image_width) // 2)
-        offset_y = max(0, (self.before_canvas.winfo_height() - image_height) // 2)
-        image_x = event.x - offset_x
-        image_y = event.y - offset_y
+        image_x = event.x
+        image_y = event.y
         if image_x < 0 or image_y < 0 or image_x > image_width or image_y > image_height:
             return
         frame_x = image_x * frame_width / image_width

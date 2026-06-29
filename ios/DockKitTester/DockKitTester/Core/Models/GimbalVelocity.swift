@@ -10,16 +10,16 @@ struct GimbalVelocity: Codable, Equatable, Sendable {
 
 struct GimbalControlConfiguration: Equatable, Sendable {
     var manualSpeed = 0.2
-    var maxYawSpeed = 0.35
-    var maxPitchSpeed = 0.22
-    var deadZone = 0.05
-    var smoothingOldWeight = 0.7
-    var kpYaw = 1.0
-    var kpPitch = 1.0
+    var maxYawSpeed = 0.45
+    var maxPitchSpeed = 0.28
+    var deadZone = 0.025
+    var smoothingOldWeight = 0.55
+    var kpYaw = 1.25
+    var kpPitch = 1.15
     var yawDirection = 1.0
     var pitchDirection = 1.0
-    var minimumErrorImprovement = 0.01
-    var maxNonImprovingUpdates = 8
+    var minimumErrorImprovement = 0.0
+    var maxNonImprovingUpdates = 20
     var edgeStopMargin = 0.04
     var edgeSlowMargin = 0.14
 }
@@ -27,11 +27,11 @@ struct GimbalControlConfiguration: Equatable, Sendable {
 struct GimbalCalibrationProfile: Codable, Equatable, Sendable {
     var yawInverted = false
     var pitchInverted = false
-    var maxYawSpeed = 0.35
-    var maxPitchSpeed = 0.22
-    var deadZone = 0.05
-    var minimumErrorImprovement = 0.01
-    var maxNonImprovingUpdates = 8
+    var maxYawSpeed = 0.45
+    var maxPitchSpeed = 0.28
+    var deadZone = 0.025
+    var minimumErrorImprovement = 0.0
+    var maxNonImprovingUpdates = 20
     var edgeStopMargin = 0.04
     var edgeSlowMargin = 0.14
 

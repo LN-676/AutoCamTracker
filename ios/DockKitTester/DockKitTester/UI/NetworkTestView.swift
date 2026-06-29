@@ -8,7 +8,7 @@ struct NetworkTestView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("AutoCamTracker V1.651")
+                Text("AutoCamTracker V1.7")
                     .font(.headline)
                 Spacer()
                 Text(client.status.rawValue)
@@ -65,7 +65,7 @@ struct NetworkTestView: View {
             .buttonStyle(.bordered)
             .disabled(!canInjectCommand)
 
-            Text("Wi-Fi and USB network links use the same WebSocket URL. Missing tracking data for 500 ms always triggers STOP.")
+            Text("Wi-Fi and USB network links use the same WebSocket URL. Missing tracking data for 2 seconds triggers STOP.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

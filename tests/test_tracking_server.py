@@ -78,7 +78,7 @@ class TrackingMessageTests(unittest.TestCase):
         self.assertEqual(message["error_x"], 1.0)
         self.assertEqual(message["error_y"], -1.0)
         self.assertEqual(message["confidence"], 1.0)
-        self.assertEqual(message["source_version"], "1.651")
+        self.assertEqual(message["source_version"], "1.7")
 
     def test_coasted_target_can_emit_predicted_tracking_command(self) -> None:
         frame_data = SimpleNamespace(

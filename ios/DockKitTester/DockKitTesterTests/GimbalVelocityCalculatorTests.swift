@@ -17,8 +17,8 @@ final class GimbalVelocityCalculatorTests: XCTestCase {
 
         let velocity = calculator.velocity(for: command)
 
-        XCTAssertEqual(velocity.yaw, 0.105, accuracy: 0.000_001)
-        XCTAssertEqual(velocity.pitch, -0.066, accuracy: 0.000_001)
+        XCTAssertEqual(velocity.yaw, 0.2025, accuracy: 0.000_001)
+        XCTAssertEqual(velocity.pitch, -0.126, accuracy: 0.000_001)
         XCTAssertEqual(velocity.roll, 0)
     }
 
@@ -68,8 +68,8 @@ final class GimbalVelocityCalculatorTests: XCTestCase {
         let trackingVelocity = calculator.velocity(for: makeCommand(errorX: 1.0, errorY: 1.0))
 
         XCTAssertEqual(deadZoneVelocity, .zero)
-        XCTAssertEqual(trackingVelocity.yaw, 0.03, accuracy: 0.000_001)
-        XCTAssertEqual(trackingVelocity.pitch, -0.024, accuracy: 0.000_001)
+        XCTAssertEqual(trackingVelocity.yaw, 0.045, accuracy: 0.000_001)
+        XCTAssertEqual(trackingVelocity.pitch, -0.036, accuracy: 0.000_001)
         XCTAssertEqual(calculator.configuration.minimumErrorImprovement, 0.04)
         XCTAssertEqual(calculator.configuration.maxNonImprovingUpdates, 5)
     }

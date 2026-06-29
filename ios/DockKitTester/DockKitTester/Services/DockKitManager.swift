@@ -33,6 +33,7 @@ final class DockKitManager: ObservableObject, DockKitMotorControlling {
     private var motorControlMode: MotorControlMode = .unknown
     private var activeOrientationProgress: Progress?
     private var orientationCommandInFlight = false
+    private var relativeOrientationFallbackUnavailable = false
 #endif
 
     init(logger: AppLogger) {
@@ -167,6 +168,10 @@ final class DockKitManager: ObservableObject, DockKitMotorControlling {
         }
 
         if motorControlMode == .relativeOrientation {
+            guard !relativeOrientationFallbackUnavailable else {
+                logger.log(.warning, "Relative orientation fallback is unavailable; ignoring motor tick until DockKit mode changes.")
+                return
+            }
             await applyRelativeOrientationFallback(
                 accessory: accessory,
                 yaw: yaw,
@@ -190,6 +195,7 @@ final class DockKitManager: ObservableObject, DockKitMotorControlling {
                 logger.log(.warning, "Angular velocity is unsupported; switching to relative orientation fallback.")
             }
             motorControlMode = .relativeOrientation
+            relativeOrientationFallbackUnavailable = false
             await applyRelativeOrientationFallback(
                 accessory: accessory,
                 yaw: yaw,
@@ -347,6 +353,7 @@ final class DockKitManager: ObservableObject, DockKitMotorControlling {
             motorControlMode = .unknown
             activeOrientationProgress = nil
             orientationCommandInFlight = false
+            relativeOrientationFallbackUnavailable = false
             accessoryStatus = .docked
             let model = newAccessory.hardwareModel ?? "DockKit Accessory"
             accessoryName = "\(model) • \(String(describing: newAccessory.identifier))"
@@ -370,6 +377,7 @@ final class DockKitManager: ObservableObject, DockKitMotorControlling {
             motorControlMode = .unknown
             activeOrientationProgress = nil
             orientationCommandInFlight = false
+            relativeOrientationFallbackUnavailable = false
             accessoryStatus = .notFound
             accessoryName = nil
             isSystemTrackingEnabled = nil
@@ -405,6 +413,7 @@ final class DockKitManager: ObservableObject, DockKitMotorControlling {
         pitch: Double,
         roll: Double
     ) async {
+        guard !relativeOrientationFallbackUnavailable else { return }
         guard !orientationCommandInFlight else { return }
         orientationCommandInFlight = true
         defer { orientationCommandInFlight = false }
@@ -429,6 +438,7 @@ final class DockKitManager: ObservableObject, DockKitMotorControlling {
                 activeOrientationProgress = nil
             }
         } catch {
+            relativeOrientationFallbackUnavailable = true
             recordError(api: "relative orientation fallback", error: error)
         }
     }
