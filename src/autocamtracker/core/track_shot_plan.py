@@ -128,7 +128,10 @@ class TrackShotController:
             (
                 target
                 for target in frame_data.selected_targets
-                if target.status == "tracking" and target.lost_frame_count == 0
+                if (
+                    (target.status == "tracking" and target.lost_frame_count == 0)
+                    or (target.status == "coasting" and target.lost_frame_count <= 3)
+                )
             ),
             None,
         )

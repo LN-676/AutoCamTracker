@@ -142,14 +142,18 @@ class VideoPipelineMixin:
         target_locked = (
             frame_data.tracking_status == "tracking"
             and selected_target is not None
-            and selected_target.status == "tracking"
-            and selected_target.lost_frame_count == 0
+            and (
+                (selected_target.status == "tracking" and selected_target.lost_frame_count == 0)
+                or (selected_target.status == "coasting" and selected_target.lost_frame_count <= 3)
+            )
         )
         fresh_target = selected_target if target_locked else None
+        motor_status = self.tracking_server.motor_status
         self.telemetry_logger.log(
             "frame_state",
             tracking_status=frame_data.tracking_status,
             target_locked=target_locked,
+            predicted_target=bool(fresh_target is not None and fresh_target.status == "coasting"),
             selected_gid=frame_data.selected_global_vehicle_id,
             selected_lid=frame_data.selected_local_track_id,
             lost_frames=frame_data.lost_frames,
@@ -168,6 +172,21 @@ class VideoPipelineMixin:
             motor_armed=self.iphone_motor_tracking_enabled,
             motor_ready=self.tracking_server.motor_ready,
             motor_output_active=motor_output_active,
+            requested_zoom_factor=self._frame_zoom_factor(frame_data, fresh_target, frame_shape),
+            phone_camera_zoom_factor=motor_status.camera_zoom_factor if motor_status is not None else None,
+            phone_camera_display_zoom_factor=(
+                motor_status.camera_display_zoom_factor if motor_status is not None else None
+            ),
+            phone_last_command_zoom_factor=(
+                motor_status.last_command.get("zoom_factor")
+                if motor_status is not None and isinstance(motor_status.last_command, dict)
+                else None
+            ),
+            phone_last_command_source_version=(
+                motor_status.last_command.get("source_version")
+                if motor_status is not None and isinstance(motor_status.last_command, dict)
+                else None
+            ),
         )
 
     def _render_current_video_frame(self) -> None:
@@ -448,27 +467,22 @@ class VideoPipelineMixin:
             target_locked = (
                 frame_data.tracking_status == "tracking"
                 and selected_target is not None
-                and selected_target.status == "tracking"
-                and selected_target.lost_frame_count == 0
+                and (
+                    (selected_target.status == "tracking" and selected_target.lost_frame_count == 0)
+                    or (selected_target.status == "coasting" and selected_target.lost_frame_count <= 3)
+                )
             )
             if target_locked and self.last_frame_shape is not None:
                 frame_h, frame_w = self.last_frame_shape[:2]
                 error_x = frame_data.framing_status.error_x / max(1.0, frame_w / 2.0)
                 error_y = frame_data.framing_status.error_y / max(1.0, frame_h / 2.0)
         fresh_target = selected_target if target_locked else None
-        zoom_factor = None
-        if fresh_target is not None and self.last_frame_shape is not None:
-            frame_h, frame_w = self.last_frame_shape[:2]
-            bbox = fresh_target.bbox
-            bbox_width = (bbox[2] - bbox[0]) / max(1.0, frame_w)
-            target_ratio_by_mode = {"wide": 0.30, "medium": 0.48, "close": 0.68}
-            target_ratio = target_ratio_by_mode.get(self.framing_var.get(), 0.48)
-            zoom_factor = max(0.1, min(10.0, target_ratio / max(0.01, bbox_width)))
+        zoom_factor = self._frame_zoom_factor(frame_data, fresh_target, self.last_frame_shape)
 
         return {
             "type": "desktop_state",
             "version": "1.0",
-            "source_version": "1.65",
+            "source_version": "1.651",
             "timestamp_ms": int(time() * 1000),
             "source": self.source_var.get(),
             "running": bool(self.running),
@@ -491,6 +505,7 @@ class VideoPipelineMixin:
                 "error_x": max(-1.0, min(1.0, float(error_x))),
                 "error_y": max(-1.0, min(1.0, float(error_y))),
                 "confidence": float(fresh_target.confidence) if fresh_target is not None else 0.0,
+                "predicted_target": bool(fresh_target is not None and fresh_target.status == "coasting"),
                 "lost_frames": int(frame_data.lost_frames) if frame_data is not None else 0,
                 "candidate_count": len(frame_data.candidates) if frame_data is not None else 0,
                 "bbox": fresh_target.bbox if fresh_target is not None else None,
@@ -521,8 +536,39 @@ class VideoPipelineMixin:
                 "error_y": frame_data.framing_status.error_y if frame_data is not None else 0.0,
                 "zoom_factor": zoom_factor,
             },
+            "diagnostics": {
+                "desktop_version": "AutoCamTracker V1.651",
+                "phone_last_command_source_version": (
+                    motor_status.last_command.get("source_version")
+                    if motor_status is not None and isinstance(motor_status.last_command, dict)
+                    else None
+                ),
+                "phone_last_command_zoom_factor": (
+                    motor_status.last_command.get("zoom_factor")
+                    if motor_status is not None and isinstance(motor_status.last_command, dict)
+                    else None
+                ),
+                "zoom_command_matches_phone": (
+                    abs(float(zoom_factor) - float(motor_status.last_command.get("zoom_factor", -999))) < 0.05
+                    if zoom_factor is not None
+                    and motor_status is not None
+                    and isinstance(motor_status.last_command, dict)
+                    and motor_status.last_command.get("zoom_factor") is not None
+                    else False
+                ),
+            },
             "gids": self._desktop_state_gids(),
         }
+
+    def _frame_zoom_factor(self, frame_data, target, frame_shape) -> float | None:
+        if frame_data is None or target is None or frame_shape is None:
+            return None
+        frame_h, frame_w = frame_shape[:2]
+        bbox = target.bbox
+        bbox_width = (bbox[2] - bbox[0]) / max(1.0, frame_w)
+        target_ratio_by_mode = {"wide": 0.30, "medium": 0.48, "close": 0.68}
+        target_ratio = target_ratio_by_mode.get(self.framing_var.get(), 0.48)
+        return max(0.1, min(10.0, target_ratio / max(0.01, bbox_width)))
 
     def _desktop_state_gids(self) -> list[dict]:
         summary = self.identity_store.summary(feature_counts=self.feature_gallery.summary_by_vehicle())

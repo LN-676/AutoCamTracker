@@ -254,6 +254,42 @@ class ReIDRuntimeOptimizationTests(unittest.TestCase):
         self.assertEqual(manager.selected_global_vehicle_id, 1)
         self.assertEqual(manager.selected_local_track_id, 1)
 
+    def test_identity_short_loss_coasts_only_when_safe(self) -> None:
+        import numpy as np
+
+        frame = np.full((360, 640, 3), 90, dtype=np.uint8)
+        manager = GlobalIdentityManager(predictive_coast_frames=3)
+        initial = detection(track_id=1, frame_index=1)
+        initial.center = (220.0, 180.0)
+        initial.bbox = (180.0, 140.0, 260.0, 220.0)
+        manager.select_detection(initial, frame, persist=False)
+        moved = detection(track_id=1, frame_index=2)
+        moved.center = (240.0, 180.0)
+        moved.bbox = (200.0, 140.0, 280.0, 220.0)
+        manager.update([moved], frame)
+
+        targets = manager.update([], frame)
+
+        self.assertEqual(manager.status, "tracking")
+        self.assertEqual(targets[0].status, "coasting")
+        self.assertEqual(targets[0].lost_frame_count, 1)
+
+    def test_identity_does_not_coast_at_frame_edge(self) -> None:
+        import numpy as np
+
+        frame = np.full((360, 640, 3), 90, dtype=np.uint8)
+        manager = GlobalIdentityManager(predictive_coast_frames=3)
+        initial = detection(track_id=1, frame_index=1)
+        initial.center = (625.0, 180.0)
+        initial.bbox = (585.0, 140.0, 639.0, 220.0)
+        manager.select_detection(initial, frame, persist=False)
+
+        targets = manager.update([], frame)
+
+        self.assertEqual(manager.status, "tracking")
+        self.assertEqual(targets[0].status, "tracking")
+        self.assertEqual(targets[0].lost_frame_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

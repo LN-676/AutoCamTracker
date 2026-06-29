@@ -76,7 +76,28 @@ class TrackingMessageTests(unittest.TestCase):
         self.assertEqual(message["error_x"], 1.0)
         self.assertEqual(message["error_y"], -1.0)
         self.assertEqual(message["confidence"], 1.0)
-        self.assertEqual(message["source_version"], "1.65")
+        self.assertEqual(message["source_version"], "1.651")
+
+    def test_coasted_target_can_emit_predicted_tracking_command(self) -> None:
+        frame_data = SimpleNamespace(
+            selected_targets=[SimpleNamespace(
+                confidence=0.62,
+                status="coasting",
+                lost_frame_count=2,
+                center=(320.0, 180.0),
+                bbox=(260.0, 140.0, 380.0, 220.0),
+            )],
+            tracking_status="tracking",
+            framing_status=SimpleNamespace(error_x=0.0, error_y=0.0, framing_mode="medium"),
+            selected_global_vehicle_id=12,
+            selected_local_track_id=7,
+        )
+
+        message = frame_tracking_message(frame_data, (360, 640, 3), sequence=44)
+
+        self.assertTrue(message["target_locked"])
+        self.assertTrue(message["predicted_target"])
+        self.assertAlmostEqual(message["zoom_factor"], 2.56)
 
     def test_motor_status_reports_dockkit_readiness(self) -> None:
         server = TrackingWebSocketServer()

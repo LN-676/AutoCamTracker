@@ -18,7 +18,7 @@ from typing import Literal
 from autocamtracker.tracking.detection_store import DetectionStore, VehicleCandidate
 
 
-TrackingStatus = Literal["idle", "tracking", "lost", "failed"]
+TrackingStatus = Literal["idle", "tracking", "coasting", "searching", "camera_cut", "lost", "failed"]
 
 
 @dataclass

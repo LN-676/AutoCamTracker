@@ -88,10 +88,33 @@ final class GimbalVelocityCalculatorTests: XCTestCase {
         XCTAssertNotNil(calculator.safetyStopReason)
     }
 
+    func testFrameEdgeSafetyStopsOutwardChase() {
+        var calculator = GimbalVelocityCalculator()
+
+        let stopped = calculator.velocity(
+            for: makeCommand(errorX: 0.8, errorY: 0, targetX: 0.98, targetY: 0.5)
+        )
+
+        XCTAssertEqual(stopped, .zero)
+        XCTAssertEqual(calculator.safetyStopReason, "target near frame edge; stop before chasing out of view")
+    }
+
+    func testFrameEdgeSlowsVelocityNearBoundary() {
+        var normal = GimbalVelocityCalculator()
+        var nearEdge = GimbalVelocityCalculator()
+
+        let normalVelocity = normal.velocity(for: makeCommand(errorX: 0.5, errorY: 0, targetX: 0.5, targetY: 0.5))
+        let edgeVelocity = nearEdge.velocity(for: makeCommand(errorX: 0.5, errorY: 0, targetX: 0.9, targetY: 0.5))
+
+        XCTAssertLessThan(abs(edgeVelocity.yaw), abs(normalVelocity.yaw))
+    }
+
     private func makeCommand(
         targetLocked: Bool = true,
         errorX: Double,
-        errorY: Double
+        errorY: Double,
+        targetX: Double? = nil,
+        targetY: Double? = nil
     ) -> TrackingCommand {
         TrackingCommand(
             type: "tracking",
@@ -101,7 +124,9 @@ final class GimbalVelocityCalculatorTests: XCTestCase {
             errorX: errorX,
             errorY: errorY,
             confidence: 0.91,
-            timestampMs: 1_781_770_000_000
+            timestampMs: 1_781_770_000_000,
+            targetX: targetX,
+            targetY: targetY
         )
     }
 }

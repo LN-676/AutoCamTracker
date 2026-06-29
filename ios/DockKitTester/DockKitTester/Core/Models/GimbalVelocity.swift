@@ -20,6 +20,8 @@ struct GimbalControlConfiguration: Equatable, Sendable {
     var pitchDirection = 1.0
     var minimumErrorImprovement = 0.01
     var maxNonImprovingUpdates = 8
+    var edgeStopMargin = 0.04
+    var edgeSlowMargin = 0.14
 }
 
 struct GimbalCalibrationProfile: Codable, Equatable, Sendable {
@@ -30,6 +32,8 @@ struct GimbalCalibrationProfile: Codable, Equatable, Sendable {
     var deadZone = 0.05
     var minimumErrorImprovement = 0.01
     var maxNonImprovingUpdates = 8
+    var edgeStopMargin = 0.04
+    var edgeSlowMargin = 0.14
 
     static let conservative = GimbalCalibrationProfile()
 
@@ -41,7 +45,9 @@ struct GimbalCalibrationProfile: Codable, Equatable, Sendable {
             yawDirection: yawInverted ? -1 : 1,
             pitchDirection: pitchInverted ? -1 : 1,
             minimumErrorImprovement: clamped(minimumErrorImprovement, min: 0.0, max: 0.08),
-            maxNonImprovingUpdates: max(3, min(30, maxNonImprovingUpdates))
+            maxNonImprovingUpdates: max(3, min(30, maxNonImprovingUpdates)),
+            edgeStopMargin: clamped(edgeStopMargin, min: 0.02, max: 0.12),
+            edgeSlowMargin: clamped(edgeSlowMargin, min: 0.08, max: 0.24)
         )
     }
 }
@@ -101,6 +107,14 @@ struct GimbalVelocityCalculator: Sendable {
             return .zero
         }
 
+        guard shouldTrackNearFrameEdge(tracking: tracking, errorX: errorX, errorY: errorY) else {
+            previous = .zero
+            previousErrorMagnitude = nil
+            nonImprovingUpdates = 0
+            safetyStopReason = "target near frame edge; stop before chasing out of view"
+            return .zero
+        }
+
         guard shouldContinueTracking(errorX: errorX, errorY: errorY) else {
             previous = .zero
             previousErrorMagnitude = nil
@@ -119,10 +133,11 @@ struct GimbalVelocityCalculator: Sendable {
             min: -configuration.maxPitchSpeed,
             max: configuration.maxPitchSpeed
         )
+        let edgeScale = edgeVelocityScale(tracking: tracking)
         let newWeight = 1 - configuration.smoothingOldWeight
         let output = GimbalVelocity(
-            yaw: previous.yaw * configuration.smoothingOldWeight + requestedYaw * newWeight,
-            pitch: previous.pitch * configuration.smoothingOldWeight + requestedPitch * newWeight,
+            yaw: (previous.yaw * configuration.smoothingOldWeight + requestedYaw * newWeight) * edgeScale,
+            pitch: (previous.pitch * configuration.smoothingOldWeight + requestedPitch * newWeight) * edgeScale,
             roll: 0
         )
         previous = output
@@ -152,6 +167,29 @@ struct GimbalVelocityCalculator: Sendable {
 
         nonImprovingUpdates += 1
         return nonImprovingUpdates < configuration.maxNonImprovingUpdates
+    }
+
+    private func shouldTrackNearFrameEdge(tracking: TrackingCommand, errorX: Double, errorY: Double) -> Bool {
+        let margin = configuration.edgeStopMargin
+        if let targetX = tracking.targetX {
+            if targetX <= margin, errorX < -configuration.deadZone { return false }
+            if targetX >= 1.0 - margin, errorX > configuration.deadZone { return false }
+        }
+        if let targetY = tracking.targetY {
+            if targetY <= margin, errorY < -configuration.deadZone { return false }
+            if targetY >= 1.0 - margin, errorY > configuration.deadZone { return false }
+        }
+        return true
+    }
+
+    private func edgeVelocityScale(tracking: TrackingCommand) -> Double {
+        let margin = configuration.edgeSlowMargin
+        let distances = [
+            tracking.targetX.map { min($0, 1.0 - $0) },
+            tracking.targetY.map { min($0, 1.0 - $0) }
+        ].compactMap { $0 }
+        guard let nearest = distances.min(), nearest < margin else { return 1.0 }
+        return max(0.35, nearest / margin)
     }
 }
 

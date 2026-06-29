@@ -164,11 +164,13 @@ class GlobalIdentityManager:
         self,
         max_lost_frames: int = 150,
         searching_after_frames: int = 5,
+        predictive_coast_frames: int = 3,
         identity_store: VehicleIdentityStore | None = None,
         feature_gallery: FeatureGallery | None = None,
     ) -> None:
         self.max_lost_frames = max_lost_frames
         self.searching_after_frames = searching_after_frames
+        self.predictive_coast_frames = predictive_coast_frames
         self.next_global_vehicle_id = 1
         self.identity_store = identity_store
         self.feature_gallery = feature_gallery
@@ -324,6 +326,14 @@ class GlobalIdentityManager:
 
         identity = self.selected_identity
         identity.lost_frames += 1
+        if (
+            not self.camera_cut_seen
+            and identity.lost_frames <= self.predictive_coast_frames
+            and self._can_predict_safely(identity, frame.shape)
+        ):
+            self.status = "tracking"
+            identity.status = "coasting"
+            return [self._coasted_selected_target(frame.shape)]
         if self.camera_cut_seen:
             self.status = "camera_cut"
         elif identity.lost_frames > self.max_lost_frames:
@@ -356,7 +366,6 @@ class GlobalIdentityManager:
             frame,
         )
         if not ranked:
-            self._reset_auto_reid_pending()
             return None, 0.0
 
         best = ranked[0]
@@ -475,7 +484,7 @@ class GlobalIdentityManager:
             identity.last_center[0] + identity.velocity[0] * max(1, identity.lost_frames + 1),
             identity.last_center[1] + identity.velocity[1] * max(1, identity.lost_frames + 1),
         )
-        radius = diagonal * min(0.65, 0.18 + identity.lost_frames * 0.025)
+        radius = diagonal * min(0.75, 0.25 + identity.lost_frames * 0.035)
         ranked = sorted(
             detections,
             key=lambda detection: (
@@ -493,10 +502,48 @@ class GlobalIdentityManager:
             <= radius**2
         ]
         if nearby:
-            return nearby[:3]
-        if identity.lost_frames >= 8:
-            return ranked[:6]
+            return nearby[:6]
+        if identity.lost_frames >= 5:
+            return ranked[:8]
         return []
+
+    def _can_predict_safely(self, identity: VehicleIdentity, frame_shape) -> bool:
+        frame_h, frame_w = frame_shape[:2]
+        margin_x = frame_w * 0.08
+        margin_y = frame_h * 0.08
+        x, y = identity.last_center
+        if x <= margin_x or x >= frame_w - margin_x or y <= margin_y or y >= frame_h - margin_y:
+            return False
+        speed = (identity.velocity[0] ** 2 + identity.velocity[1] ** 2) ** 0.5
+        return speed <= max(frame_w, frame_h) * 0.08
+
+    def _coasted_selected_target(self, frame_shape) -> SelectedTarget:
+        assert self.selected_identity is not None
+        identity = self.selected_identity
+        frame_h, frame_w = frame_shape[:2]
+        lost = max(1, identity.lost_frames)
+        dx = identity.velocity[0] * lost
+        dy = identity.velocity[1] * lost
+        x1, y1, x2, y2 = identity.last_bbox
+        width = max(1.0, x2 - x1)
+        height = max(1.0, y2 - y1)
+        center_x = max(width / 2.0, min(frame_w - width / 2.0, identity.last_center[0] + dx))
+        center_y = max(height / 2.0, min(frame_h - height / 2.0, identity.last_center[1] + dy))
+        bbox = (
+            center_x - width / 2.0,
+            center_y - height / 2.0,
+            center_x + width / 2.0,
+            center_y + height / 2.0,
+        )
+        return SelectedTarget(
+            track_id=identity.last_track_id if identity.last_track_id is not None else -1,
+            bbox=bbox,
+            class_name=identity.class_name,
+            confidence=max(0.20, identity.confidence * max(0.35, 1.0 - lost * 0.18)),
+            center=(center_x, center_y),
+            status="coasting",
+            lost_frame_count=lost,
+        )
 
     def _identity_from_detection(
         self,

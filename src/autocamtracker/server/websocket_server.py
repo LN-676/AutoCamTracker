@@ -1,4 +1,4 @@
-"""WebSocket bridge from AutoCamTracker V1.65 to the DockKit iOS app."""
+"""WebSocket bridge from AutoCamTracker V1.651 to the DockKit iOS app."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from typing import Any, Callable
 
 from autocamtracker.core.telemetry_logger import TelemetryLogger
 
-SOURCE_VERSION = "1.65"
+SOURCE_VERSION = "1.651"
 
 
 @dataclass(frozen=True)
@@ -59,6 +59,7 @@ def tracking_message(
     bbox_width: float | None = None,
     bbox_height: float | None = None,
     zoom_factor: float | None = None,
+    predicted: bool = False,
 ) -> dict[str, Any]:
     """Build the versioned wire message consumed by TrackingCommand.swift."""
 
@@ -87,6 +88,8 @@ def tracking_message(
         )
     if zoom_factor is not None:
         message["zoom_factor"] = max(0.1, min(10.0, float(zoom_factor)))
+    if predicted:
+        message["predicted_target"] = True
     return message
 
 
@@ -99,7 +102,10 @@ def frame_tracking_message(frame_data, frame_shape, sequence: int = 0) -> dict[s
         (
             target
             for target in targets
-            if target.status == "tracking" and target.lost_frame_count == 0
+            if (
+                (target.status == "tracking" and target.lost_frame_count == 0)
+                or (target.status == "coasting" and target.lost_frame_count <= 3)
+            )
         ),
         None,
     )
@@ -130,6 +136,7 @@ def frame_tracking_message(frame_data, frame_shape, sequence: int = 0) -> dict[s
         bbox_width=bbox_width,
         bbox_height=(bbox[3] - bbox[1]) / max(1.0, frame_h),
         zoom_factor=zoom_factor,
+        predicted=fresh_target.status == "coasting",
     )
 
 

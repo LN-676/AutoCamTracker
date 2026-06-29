@@ -34,8 +34,15 @@ struct ContentView: View {
                 }
             }
         }
-        .onChange(of: dockKitManager.isDocked) { _, _ in
-            Task { await publishMotorStatus() }
+        .onChange(of: dockKitManager.isDocked) { _, isDocked in
+            Task {
+                if !isDocked {
+                    await controlService.emergencyStop(reason: "DockKit undocked; motor tracking paused")
+                } else {
+                    await dockKitManager.startListening()
+                }
+                await publishMotorStatus()
+            }
         }
         .onChange(of: dockKitManager.isManualControlReady) { _, _ in
             Task { await publishMotorStatus() }
@@ -276,7 +283,7 @@ struct ContentView: View {
             }
         }
         networkClient.onTimeout = { [weak controlService] in
-            await controlService?.emergencyStop(reason: "V1.65 timeout or disconnect")
+            await controlService?.emergencyStop(reason: "V1.651 timeout or disconnect")
         }
         await cameraSession.start()
         await dockKitManager.startListening()

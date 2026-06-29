@@ -18,6 +18,7 @@ struct TrackingCommand: Codable, Equatable, Sendable {
     let bboxWidth: Double?
     let bboxHeight: Double?
     let zoomFactor: Double?
+    let predictedTarget: Bool?
 
     init(
         type: String,
@@ -36,7 +37,8 @@ struct TrackingCommand: Codable, Equatable, Sendable {
         targetY: Double? = nil,
         bboxWidth: Double? = nil,
         bboxHeight: Double? = nil,
-        zoomFactor: Double? = nil
+        zoomFactor: Double? = nil,
+        predictedTarget: Bool? = nil
     ) {
         self.type = type
         self.version = version
@@ -55,6 +57,7 @@ struct TrackingCommand: Codable, Equatable, Sendable {
         self.bboxWidth = bboxWidth
         self.bboxHeight = bboxHeight
         self.zoomFactor = zoomFactor
+        self.predictedTarget = predictedTarget
     }
 
     enum CodingKeys: String, CodingKey {
@@ -72,6 +75,7 @@ struct TrackingCommand: Codable, Equatable, Sendable {
         case bboxWidth = "bbox_width"
         case bboxHeight = "bbox_height"
         case zoomFactor = "zoom_factor"
+        case predictedTarget = "predicted_target"
     }
 
     func isTrackable(minimumConfidence: Double = 0.20) -> Bool {

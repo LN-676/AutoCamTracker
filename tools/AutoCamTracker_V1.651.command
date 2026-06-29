@@ -2,7 +2,7 @@
 set -e
 
 PROJECT_DIR="/Users/linen/.codex/worktrees/3267/AutoCamTracker"
-LOG_FILE="/tmp/autocamtracker-v165-launch.log"
+LOG_FILE="/tmp/autocamtracker-v1651-launch.log"
 
 cd "$PROJECT_DIR"
 
