@@ -271,7 +271,7 @@ struct ContentView: View {
             }
         }
         networkClient.onCommand = { [weak controlService, weak cameraSession] command in
-            cameraSession?.applyTrackingDisplayZoom(command.zoomFactor)
+            cameraSession?.applyTrackingDisplayZoom(command.zoomFactor, force: !command.targetLocked)
             await controlService?.apply(command)
         }
         networkClient.onControl = { [weak controlService] message in
@@ -282,7 +282,8 @@ struct ContentView: View {
                 break
             }
         }
-        networkClient.onTimeout = { [weak controlService] in
+        networkClient.onTimeout = { [weak controlService, weak cameraSession] in
+            cameraSession?.resetTrackingDisplayZoom()
             await controlService?.emergencyStop(reason: "V1.651 timeout or disconnect")
         }
         await cameraSession.start()

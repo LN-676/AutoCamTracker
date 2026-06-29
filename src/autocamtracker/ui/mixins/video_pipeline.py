@@ -27,7 +27,11 @@ from autocamtracker.core.pipeline_processor import PipelineProcessor
 from autocamtracker.core.pipeline_worker import TrackingWorker
 from autocamtracker.vision.reframer import FramingConfig, Reframer
 from autocamtracker.vision.scene_cut import SceneCutDetector
-from autocamtracker.server.websocket_server import TrackingWebSocketServer
+from autocamtracker.server.websocket_server import (
+    CENTER_ZOOM_FACTOR,
+    TrackingWebSocketServer,
+    zoom_factor_for_framing,
+)
 from autocamtracker.core.track_shot_plan import TrackShotController, TrackZone, should_publish_motor_tracking
 from autocamtracker.tracking.vehicle_identity_store import VehicleIdentityStore
 
@@ -126,7 +130,7 @@ class VideoPipelineMixin:
         ):
             self._disable_iphone_motor_tracking(shot_decision.reason)
         else:
-            self.tracking_server.publish_stop()
+            self.tracking_server.publish_stop(CENTER_ZOOM_FACTOR)
         self._log_frame_telemetry(frame_data, frame.shape, shot_decision, motor_output_active)
         self._run_auto_feature_sampling(frame)
         self.refresh_identity_db_panel(force=False)
@@ -563,12 +567,7 @@ class VideoPipelineMixin:
     def _frame_zoom_factor(self, frame_data, target, frame_shape) -> float | None:
         if frame_data is None or target is None or frame_shape is None:
             return None
-        frame_h, frame_w = frame_shape[:2]
-        bbox = target.bbox
-        bbox_width = (bbox[2] - bbox[0]) / max(1.0, frame_w)
-        target_ratio_by_mode = {"wide": 0.30, "medium": 0.48, "close": 0.68}
-        target_ratio = target_ratio_by_mode.get(self.framing_var.get(), 0.48)
-        return max(0.1, min(10.0, target_ratio / max(0.01, bbox_width)))
+        return zoom_factor_for_framing(self.framing_var.get())
 
     def _desktop_state_gids(self) -> list[dict]:
         summary = self.identity_store.summary(feature_counts=self.feature_gallery.summary_by_vehicle())

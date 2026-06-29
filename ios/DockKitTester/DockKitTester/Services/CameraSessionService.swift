@@ -124,19 +124,23 @@ final class CameraSessionService: ObservableObject {
         setZoom(requestedFactor / max(displayZoomFactorMultiplier, 0.01))
     }
 
-    func applyTrackingDisplayZoom(_ requestedFactor: Double?) {
+    func applyTrackingDisplayZoom(_ requestedFactor: Double?, force: Bool = false) {
         guard let requestedFactor, requestedFactor.isFinite else { return }
         let displayFactor = CGFloat(requestedFactor)
         let clampedDisplayFactor = min(max(displayFactor, minimumDisplayZoomFactor), maximumDisplayZoomFactor)
-        guard abs(clampedDisplayFactor - displayZoomFactor) >= 0.08 else { return }
+        guard force || abs(clampedDisplayFactor - displayZoomFactor) >= 0.08 else { return }
         let now = Date()
-        guard now.timeIntervalSince(lastTrackingZoomUpdate) >= 0.35 else { return }
+        guard force || now.timeIntervalSince(lastTrackingZoomUpdate) >= 0.35 else { return }
         lastTrackingZoomUpdate = now
         logger.log(
             .info,
             String(format: "Tracking zoom request: display %.2f -> %.2f.", Double(requestedFactor), Double(clampedDisplayFactor))
         )
         setZoomSmooth(clampedDisplayFactor / max(displayZoomFactorMultiplier, 0.01))
+    }
+
+    func resetTrackingDisplayZoom() {
+        applyTrackingDisplayZoom(Double(minimumDisplayZoomFactor), force: true)
     }
 
     func focus(at devicePoint: CGPoint) {

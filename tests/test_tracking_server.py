@@ -40,7 +40,7 @@ class TrackingMessageTests(unittest.TestCase):
         self.assertEqual(message["frame_height"], 360)
         self.assertAlmostEqual(message["target_x"], 0.75)
         self.assertAlmostEqual(message["bbox_width"], 0.25)
-        self.assertAlmostEqual(message["zoom_factor"], 1.92)
+        self.assertAlmostEqual(message["zoom_factor"], 1.6)
 
     def test_lost_target_emits_stop(self) -> None:
         frame_data = SimpleNamespace(
@@ -53,6 +53,7 @@ class TrackingMessageTests(unittest.TestCase):
         self.assertFalse(message["target_locked"])
         self.assertEqual(message["error_x"], 0.0)
         self.assertEqual(message["error_y"], 0.0)
+        self.assertAlmostEqual(message["zoom_factor"], 1.0)
 
     def test_stale_selected_bbox_emits_stop(self) -> None:
         frame_data = SimpleNamespace(
@@ -64,6 +65,7 @@ class TrackingMessageTests(unittest.TestCase):
 
         self.assertFalse(message["target_locked"])
         self.assertEqual(message["sequence"], 43)
+        self.assertAlmostEqual(message["zoom_factor"], 1.0)
 
     def test_wire_values_are_clamped(self) -> None:
         message = tracking_message(
@@ -97,7 +99,7 @@ class TrackingMessageTests(unittest.TestCase):
 
         self.assertTrue(message["target_locked"])
         self.assertTrue(message["predicted_target"])
-        self.assertAlmostEqual(message["zoom_factor"], 2.56)
+        self.assertAlmostEqual(message["zoom_factor"], 1.6)
 
     def test_motor_status_reports_dockkit_readiness(self) -> None:
         server = TrackingWebSocketServer()

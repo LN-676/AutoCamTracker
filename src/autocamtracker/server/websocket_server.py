@@ -16,6 +16,14 @@ from typing import Any, Callable
 from autocamtracker.core.telemetry_logger import TelemetryLogger
 
 SOURCE_VERSION = "1.651"
+FRAMING_ZOOM_FACTORS = {"wide": 1.0, "medium": 1.6, "close": 2.4}
+CENTER_ZOOM_FACTOR = FRAMING_ZOOM_FACTORS["wide"]
+
+
+def zoom_factor_for_framing(framing_mode: str | None) -> float:
+    """Return the fixed iPhone display zoom for a desktop framing mode."""
+
+    return FRAMING_ZOOM_FACTORS.get(framing_mode or "medium", FRAMING_ZOOM_FACTORS["medium"])
 
 
 @dataclass(frozen=True)
@@ -109,16 +117,17 @@ def frame_tracking_message(frame_data, frame_shape, sequence: int = 0) -> dict[s
         ),
         None,
     )
+    framing_mode = getattr(getattr(frame_data, "framing_status", None), "framing_mode", "medium")
     if fresh_target is None or frame_data.tracking_status != "tracking":
-        return tracking_message(target_locked=False, sequence=sequence)
+        return tracking_message(
+            target_locked=False,
+            sequence=sequence,
+            zoom_factor=CENTER_ZOOM_FACTOR,
+        )
 
     status = frame_data.framing_status
     bbox = fresh_target.bbox
     bbox_width = (bbox[2] - bbox[0]) / max(1.0, frame_w)
-    target_ratio_by_mode = {"wide": 0.30, "medium": 0.48, "close": 0.68}
-    framing_mode = getattr(frame_data.framing_status, "framing_mode", "medium")
-    target_ratio = target_ratio_by_mode.get(framing_mode, 0.48)
-    zoom_factor = target_ratio / max(0.01, bbox_width)
     target_id = frame_data.selected_global_vehicle_id
     if target_id is None:
         target_id = frame_data.selected_local_track_id
@@ -135,7 +144,7 @@ def frame_tracking_message(frame_data, frame_shape, sequence: int = 0) -> dict[s
         target_y=fresh_target.center[1] / max(1.0, frame_h),
         bbox_width=bbox_width,
         bbox_height=(bbox[3] - bbox[1]) / max(1.0, frame_h),
-        zoom_factor=zoom_factor,
+        zoom_factor=zoom_factor_for_framing(framing_mode),
         predicted=fresh_target.status == "coasting",
     )
 
@@ -294,9 +303,15 @@ class TrackingWebSocketServer:
             )
         )
 
-    def publish_stop(self) -> None:
+    def publish_stop(self, zoom_factor: float | None = CENTER_ZOOM_FACTOR) -> None:
         self._sequence += 1
-        self.publish(tracking_message(target_locked=False, sequence=self._sequence))
+        self.publish(
+            tracking_message(
+                target_locked=False,
+                sequence=self._sequence,
+                zoom_factor=zoom_factor,
+            )
+        )
 
     def publish_control(self, action: str) -> None:
         self.publish(
