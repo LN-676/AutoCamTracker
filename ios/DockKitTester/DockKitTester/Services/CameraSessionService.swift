@@ -43,9 +43,9 @@ enum CameraStreamPreset: String, CaseIterable, Identifiable {
     }
     var minimumFrameInterval: Double {
         switch self {
-        case .lowLatency: 1.0 / 15.0
-        case .balanced: 1.0 / 15.0
-        case .detail: 1.0 / 12.0
+        case .lowLatency: 1.0 / 30.0
+        case .balanced: 1.0 / 24.0
+        case .detail: 1.0 / 20.0
         }
     }
     var jpegQuality: CGFloat {
@@ -260,6 +260,7 @@ final class CameraSessionService: ObservableObject {
                         capture.maximumZoomFactor = min(camera.maxAvailableVideoZoomFactor, 10)
                         capture.zoomFactor = camera.videoZoomFactor
                         capture.displayZoomFactorMultiplier = camera.displayVideoZoomFactorMultiplier
+                        try Self.configureFrameRate(camera, fps: 30)
 
                         let output = AVCaptureVideoDataOutput()
                         output.alwaysDiscardsLateVideoFrames = true
@@ -340,6 +341,18 @@ final class CameraSessionService: ObservableObject {
         }.first
     }
 
+    private nonisolated static func configureFrameRate(_ camera: AVCaptureDevice, fps: Int32) throws {
+        let duration = CMTime(value: 1, timescale: fps)
+        let supportsFrameRate = camera.activeFormat.videoSupportedFrameRateRanges.contains { range in
+            range.minFrameRate <= Double(fps) && Double(fps) <= range.maxFrameRate
+        }
+        guard supportsFrameRate else { return }
+        try camera.lockForConfiguration()
+        camera.activeVideoMinFrameDuration = duration
+        camera.activeVideoMaxFrameDuration = duration
+        camera.unlockForConfiguration()
+    }
+
     private func recordError(_ message: String) {
         lastError = message
         isRunning = false
@@ -349,7 +362,7 @@ final class CameraSessionService: ObservableObject {
 
 private final class CaptureSessionBox: @unchecked Sendable {
     let session = AVCaptureSession()
-    let frameQueue = DispatchQueue(label: "com.linen.DockKitTester.camera-frames")
+    let frameQueue = DispatchQueue(label: "com.linen.DockKitTester.camera-frames", qos: .userInitiated)
     let frameStreamer = JPEGFrameStreamer()
     var camera: AVCaptureDevice?
     var minimumZoomFactor: CGFloat = 1

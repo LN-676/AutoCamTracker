@@ -61,7 +61,8 @@ class UIBuilderMixin:
         controls.columnconfigure(2, weight=1, minsize=180)
 
         self.source_var = tk.StringVar(value="iphone")
-        self.tracker_var = tk.StringVar(value="botsort")
+        self.performance_profile_var = tk.StringVar(value="High FPS")
+        self.tracker_var = tk.StringVar(value="bytetrack")
         self.framing_var = tk.StringVar(value="medium")
         self.model_var = tk.StringVar(value=self.config.default_model)
         self.reid_model_var = tk.StringVar(value=self.config.default_reid_model)
@@ -142,18 +143,29 @@ class UIBuilderMixin:
         self.model_box.bind("<<ComboboxSelected>>", self.on_tracking_configuration_changed)
         ttk.Button(tracking_controls, text="Refresh", command=self.refresh_model_options).grid(row=0, column=2, sticky="ew", padx=4)
 
-        ttk.Label(tracking_controls, text="Tracker").grid(row=1, column=0, sticky="w", padx=4, pady=(6, 0))
-        self.tracker_box = ttk.Combobox(
+        ttk.Label(tracking_controls, text="Profile").grid(row=1, column=0, sticky="w", padx=4, pady=(6, 0))
+        self.performance_profile_box = ttk.Combobox(
             tracking_controls,
-            textvariable=self.tracker_var,
-            values=["botsort", "deepocsort"],
+            textvariable=self.performance_profile_var,
+            values=["High FPS", "Balanced ID"],
             width=13,
             state="readonly",
         )
-        self.tracker_box.grid(row=1, column=1, sticky="ew", padx=4, pady=(6, 0))
+        self.performance_profile_box.grid(row=1, column=1, sticky="ew", padx=4, pady=(6, 0))
+        self.performance_profile_box.bind("<<ComboboxSelected>>", self.apply_performance_profile)
+
+        ttk.Label(tracking_controls, text="Tracker").grid(row=2, column=0, sticky="w", padx=4, pady=(6, 0))
+        self.tracker_box = ttk.Combobox(
+            tracking_controls,
+            textvariable=self.tracker_var,
+            values=["bytetrack", "botsort", "deepocsort"],
+            width=13,
+            state="readonly",
+        )
+        self.tracker_box.grid(row=2, column=1, sticky="ew", padx=4, pady=(6, 0))
         self.tracker_box.bind("<<ComboboxSelected>>", self.on_tracking_configuration_changed)
 
-        ttk.Label(tracking_controls, text="Framing").grid(row=1, column=2, sticky="w", padx=(10, 2), pady=(6, 0))
+        ttk.Label(tracking_controls, text="Framing").grid(row=2, column=2, sticky="w", padx=(10, 2), pady=(6, 0))
         self.framing_box = ttk.Combobox(
             tracking_controls,
             textvariable=self.framing_var,
@@ -161,12 +173,12 @@ class UIBuilderMixin:
             width=13,
             state="readonly",
         )
-        self.framing_box.grid(row=1, column=3, sticky="ew", padx=4, pady=(6, 0))
+        self.framing_box.grid(row=2, column=3, sticky="ew", padx=4, pady=(6, 0))
         self.framing_box.bind("<<ComboboxSelected>>", lambda _: self.apply_ui_config())
-        ttk.Button(tracking_controls, text="Auto Track", command=self.auto_select_one).grid(row=2, column=0, columnspan=2, sticky="ew", padx=4, pady=(7, 0))
-        ttk.Button(tracking_controls, text="Clear", command=self.clear_selection).grid(row=2, column=2, sticky="ew", padx=4, pady=(7, 0))
-        ttk.Button(tracking_controls, text="Reset", command=self.reset_tracking).grid(row=2, column=3, sticky="ew", padx=4, pady=(7, 0))
-        ttk.Label(tracking_controls, text="ReID Model").grid(row=3, column=0, sticky="w", padx=4, pady=(7, 0))
+        ttk.Button(tracking_controls, text="Auto Track", command=self.auto_select_one).grid(row=3, column=0, columnspan=2, sticky="ew", padx=4, pady=(7, 0))
+        ttk.Button(tracking_controls, text="Clear", command=self.clear_selection).grid(row=3, column=2, sticky="ew", padx=4, pady=(7, 0))
+        ttk.Button(tracking_controls, text="Reset", command=self.reset_tracking).grid(row=3, column=3, sticky="ew", padx=4, pady=(7, 0))
+        ttk.Label(tracking_controls, text="ReID Model").grid(row=4, column=0, sticky="w", padx=4, pady=(7, 0))
         self.reid_model_box = ttk.Combobox(
             tracking_controls,
             textvariable=self.reid_model_var,
@@ -174,10 +186,10 @@ class UIBuilderMixin:
             width=18,
             state="readonly",
         )
-        self.reid_model_box.grid(row=3, column=1, columnspan=2, sticky="ew", padx=4, pady=(7, 0))
+        self.reid_model_box.grid(row=4, column=1, columnspan=2, sticky="ew", padx=4, pady=(7, 0))
         self.reid_model_box.bind("<<ComboboxSelected>>", lambda _: self.apply_reid_model_config())
         ttk.Button(tracking_controls, text="Refresh ReID", command=self.refresh_reid_model_options).grid(
-            row=3, column=3, sticky="ew", padx=4, pady=(7, 0)
+            row=4, column=3, sticky="ew", padx=4, pady=(7, 0)
         )
         tracking_controls.columnconfigure(1, weight=1)
         tracking_controls.columnconfigure(3, weight=1)
@@ -402,6 +414,18 @@ class UIBuilderMixin:
         self.input_config = self._ui_input_config()
         self.reframer.set_framing_mode(self.framing_var.get())
 
+    def apply_performance_profile(self, _event=None) -> str:
+        profile = self.performance_profile_var.get()
+        if profile == "Balanced ID":
+            self.model_var.set("yolo26s.pt")
+            self.tracker_var.set("botsort")
+        else:
+            self.performance_profile_var.set("High FPS")
+            self.model_var.set("yolo26n.pt")
+            self.tracker_var.set("bytetrack")
+        self.on_tracking_configuration_changed()
+        return "break"
+
     def apply_track_shot_config(self, _event=None) -> str:
         try:
             in_zone = TrackZone.parse(self.in_zone_var.get())
@@ -471,6 +495,7 @@ class UIBuilderMixin:
         except ValueError:
             camera_index = 0
 
+        high_fps = self.performance_profile_var.get() != "Balanced ID"
         return InputConfig(
             source_type=self.source_var.get(),
             camera_index=camera_index,
@@ -485,6 +510,9 @@ class UIBuilderMixin:
             confidence_threshold=self.input_config.confidence_threshold,
             iou_threshold=self.input_config.iou_threshold,
             vehicle_classes_only=self.input_config.vehicle_classes_only,
+            target_source_fps=30.0,
+            detector_imgsz=640 if high_fps else None,
+            tracker_reid_enabled=not high_fps and self.tracker_var.get() == "botsort",
         )
 
     def _update_source_controls(self) -> None:

@@ -284,7 +284,7 @@ struct ContentView: View {
         }
         networkClient.onTimeout = { [weak controlService, weak cameraSession] in
             cameraSession?.resetTrackingDisplayZoom()
-            await controlService?.emergencyStop(reason: "V1.71 timeout or disconnect")
+            await controlService?.emergencyStop(reason: "V1.73 timeout or disconnect")
         }
         await cameraSession.start()
         await dockKitManager.startListening()

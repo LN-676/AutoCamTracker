@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 
 
 SourceType = Literal["webcam", "video_file", "video_url", "screen_region", "iphone"]
-TrackerName = Literal["botsort", "deepocsort"]
+TrackerName = Literal["bytetrack", "botsort", "deepocsort"]
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -33,6 +33,7 @@ CACHE_ROOT = Path(tempfile.gettempdir()) / "autocamtracker-cache"
 
 
 TRACKER_CONFIGS: dict[TrackerName, str] = {
+    "bytetrack": "bytetrack.yaml",
     "botsort": "botsort.yaml",
     "deepocsort": "deepocsort.yaml",
 }
@@ -56,6 +57,9 @@ class InputConfig:
     iou_threshold: float = 0.65
     vehicle_classes_only: bool = True
     tracker_buffer_seconds: float = 5.0
+    target_source_fps: float = 30.0
+    detector_imgsz: int | None = 640
+    tracker_reid_enabled: bool = False
 
 
 @dataclass
@@ -157,7 +161,7 @@ class VideoDetector:
         elif self.config.source_type == "iphone":
             if self.frame_provider is None:
                 raise ValueError("frame_provider is required for iphone input")
-            self.source_fps = 15.0
+            self.source_fps = max(1.0, float(self.config.target_source_fps))
             self.source_frame_count = None
             self._configure_tracker_buffer()
 
@@ -208,6 +212,7 @@ class VideoDetector:
                 frame,
                 conf=self.config.confidence_threshold,
                 iou=self.config.iou_threshold,
+                imgsz=self.config.detector_imgsz,
                 verbose=False,
             )
             return self._track_with_deepocsort(results)
@@ -219,6 +224,7 @@ class VideoDetector:
             tracker=tracker_config,
             conf=self.config.confidence_threshold,
             iou=self.config.iou_threshold,
+            imgsz=self.config.detector_imgsz,
             verbose=False,
         )
         return self._parse_results(results)
@@ -315,6 +321,8 @@ class VideoDetector:
 
         if self.config.tracker_name == "botsort":
             self._tracker_config_path = self._write_botsort_config(buffer_frames)
+        elif self.config.tracker_name == "bytetrack":
+            self._tracker_config_path = self._write_bytetrack_config(buffer_frames)
         else:
             self._tracker_config_path = None
 
@@ -322,11 +330,12 @@ class VideoDetector:
         fps = self.source_fps if self.source_fps and self.source_fps > 1.0 else 30.0
         return max(1, int(round(float(self.config.tracker_buffer_seconds) * fps)))
 
-    @staticmethod
-    def _write_botsort_config(track_buffer: int) -> Path:
+    def _write_botsort_config(self, track_buffer: int) -> Path:
         config_dir = CACHE_ROOT / "trackers"
         config_dir.mkdir(parents=True, exist_ok=True)
-        path = config_dir / f"botsort_buffer_{track_buffer}.yaml"
+        reid_enabled = bool(self.config.tracker_reid_enabled)
+        reid_suffix = "reid" if reid_enabled else "motion"
+        path = config_dir / f"botsort_{reid_suffix}_buffer_{track_buffer}.yaml"
         path.write_text(
             "\n".join(
                 [
@@ -340,8 +349,30 @@ class VideoDetector:
                     "gmc_method: sparseOptFlow",
                     "proximity_thresh: 0.5",
                     "appearance_thresh: 0.8",
-                    "with_reid: True",
+                    f"with_reid: {str(reid_enabled)}",
                     f"model: {(MODEL_DIR / 'yolo26s-reid.onnx').as_posix()}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    @staticmethod
+    def _write_bytetrack_config(track_buffer: int) -> Path:
+        config_dir = CACHE_ROOT / "trackers"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        path = config_dir / f"bytetrack_buffer_{track_buffer}.yaml"
+        path.write_text(
+            "\n".join(
+                [
+                    "tracker_type: bytetrack",
+                    "track_high_thresh: 0.25",
+                    "track_low_thresh: 0.1",
+                    "new_track_thresh: 0.25",
+                    f"track_buffer: {track_buffer}",
+                    "match_thresh: 0.8",
+                    "fuse_score: True",
                     "",
                 ]
             ),

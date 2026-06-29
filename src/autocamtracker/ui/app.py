@@ -48,7 +48,7 @@ from autocamtracker.tracking.vehicle_identity_store import VehicleIdentityStore
 
 @dataclass
 class AppConfig:
-    window_title: str = "AutoCamTracker V1.71"
+    window_title: str = "AutoCamTracker V1.73"
     update_interval_ms: int = 15
     output_width: int = 640
     output_height: int = 360
@@ -56,7 +56,7 @@ class AppConfig:
     telemetry_dir: Path = Path("outputs") / "telemetry"
     identity_db_path: Path = Path("outputs") / "vehicle_identity.sqlite3"
     model_dir: Path = Path(__file__).resolve().parents[3] / "code" / "model"
-    default_model: str = "yolo26s.pt"
+    default_model: str = "yolo26n.pt"
     default_reid_model: str = "yolo26s-reid.onnx"
 
 

@@ -17,7 +17,7 @@ from autocamtracker.tracking.feature_gallery import DetectionFeatureMatch, Featu
 from autocamtracker.tracking.identity_manager import GlobalIdentityManager
 from autocamtracker.core.pipeline_worker import TrackingWorker
 from autocamtracker.tracking.vehicle_identity_store import VehicleIdentityStore
-from autocamtracker.vision.detector import TrackedDetection
+from autocamtracker.vision.detector import InputConfig, TrackedDetection, VideoDetector
 from autocamtracker.vision.scene_cut import SceneCutDetector
 
 
@@ -120,6 +120,41 @@ class IdentitySessionLinksTests(unittest.TestCase):
         links.link(9, 303)
         links.clear()
         self.assertIsNone(links.vehicle_for_track(9))
+
+
+class DetectorRuntimeConfigTests(unittest.TestCase):
+    def test_iphone_source_uses_configured_30fps_budget_with_bytetrack(self) -> None:
+        detector = VideoDetector(
+            InputConfig(source_type="iphone", tracker_name="bytetrack", target_source_fps=30.0),
+            frame_provider=lambda: None,
+        )
+
+        detector.open_source()
+
+        self.assertEqual(detector.get_source_fps(), 30.0)
+        self.assertEqual(detector._tracker_buffer_frames(), 150)
+        self.assertIsNotNone(detector._tracker_config_path)
+        config_text = detector._tracker_config_path.read_text(encoding="utf-8")
+        self.assertIn("tracker_type: bytetrack", config_text)
+        self.assertNotIn("with_reid", config_text)
+
+    def test_botsort_reid_can_be_reserved_for_balanced_identity_profile(self) -> None:
+        detector = VideoDetector(
+            InputConfig(
+                source_type="iphone",
+                tracker_name="botsort",
+                target_source_fps=30.0,
+                tracker_reid_enabled=True,
+            ),
+            frame_provider=lambda: None,
+        )
+
+        detector.open_source()
+
+        self.assertIsNotNone(detector._tracker_config_path)
+        config_text = detector._tracker_config_path.read_text(encoding="utf-8")
+        self.assertIn("tracker_type: botsort", config_text)
+        self.assertIn("with_reid: True", config_text)
 
 
 class VehicleIdentityStoreBatchingTests(unittest.TestCase):
