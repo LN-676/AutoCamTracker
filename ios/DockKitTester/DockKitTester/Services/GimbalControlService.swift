@@ -17,7 +17,7 @@ final class GimbalControlService: ObservableObject {
     private var lostStartedAt: Date?
     private var stableLockCount = 0
     private var autoReturnInFlight = false
-    private let calibrationKey = "AutoCamTrackerGimbalCalibrationV175"
+    private let calibrationKey = "AutoCamTrackerGimbalCalibrationV176"
 
     init(dockKitManager: DockKitMotorControlling, logger: AppLogger) {
         self.dockKitManager = dockKitManager
@@ -134,8 +134,8 @@ final class GimbalControlService: ObservableObject {
 
     func apply(_ trackingCommand: TrackingCommand) async {
         guard trackingCommand.type == "tracking" else {
-            logger.log(.error, "Ignored V1.75 message with unsupported type: \(trackingCommand.type).")
-            await emergencyStop(reason: "invalid V1.75 message")
+            logger.log(.error, "Ignored V1.76 message with unsupported type: \(trackingCommand.type).")
+            await emergencyStop(reason: "invalid V1.76 message")
             return
         }
 

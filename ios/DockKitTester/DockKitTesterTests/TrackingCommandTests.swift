@@ -3,14 +3,14 @@ import XCTest
 @testable import DockKitTesterCore
 
 final class TrackingCommandTests: XCTestCase {
-    func testDecodesV175SnakeCasePayload() throws {
-        let json = #"{"type":"tracking","version":"1.0","source_version":"1.75","sequence":42,"target_locked":true,"target_id":7,"error_x":0.18,"error_y":-0.04,"confidence":0.91,"timestamp_ms":1781770000000,"zoom_factor":2.4,"predicted_target":true}"#
+    func testDecodesV176SnakeCasePayload() throws {
+        let json = #"{"type":"tracking","version":"1.0","source_version":"1.76","sequence":42,"target_locked":true,"target_id":7,"error_x":0.18,"error_y":-0.04,"confidence":0.91,"timestamp_ms":1781770000000,"zoom_factor":2.4,"predicted_target":true}"#
 
         let command = try JSONDecoder().decode(TrackingCommand.self, from: Data(json.utf8))
 
         XCTAssertEqual(command.type, "tracking")
         XCTAssertEqual(command.version, "1.0")
-        XCTAssertEqual(command.sourceVersion, "1.75")
+        XCTAssertEqual(command.sourceVersion, "1.76")
         XCTAssertEqual(command.sequence, 42)
         XCTAssertTrue(command.targetLocked)
         XCTAssertEqual(command.targetId, 7)
@@ -76,7 +76,7 @@ final class TrackingCommandTests: XCTestCase {
         {
           "type": "desktop_state",
           "version": "1.0",
-          "source_version": "1.75",
+          "source_version": "1.76",
           "timestamp_ms": 1781770000000,
           "source": "iphone",
           "running": true,
