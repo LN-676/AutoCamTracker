@@ -76,6 +76,7 @@ class VideoPipelineMixin:
         frame_data.display_fps = self.fps
         frame_data.source_fps = self.detector.get_source_fps()
         frame_data.skipped_frames = self.skipped_frames
+        self.performance_evaluator.record_frame(frame_data)
 
         auto_feature_note = (
             f" | AutoFeat: {self.auto_feature_status_message}"
@@ -316,6 +317,7 @@ class VideoPipelineMixin:
         self.current_frame_data = None
         self.last_preview_render_at = 0.0
         self.skipped_frames = 0
+        self.performance_evaluator.reset()
         self.auto_feature_sampler.stop()
         self.auto_feature_status_message = ""
         self._set_identity_mode("click bbox to select a local track")

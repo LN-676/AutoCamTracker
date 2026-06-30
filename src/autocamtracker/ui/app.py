@@ -38,6 +38,7 @@ from autocamtracker.core.frame_data import FrameData
 from autocamtracker.tracking.identity_manager import GlobalIdentityManager
 from autocamtracker.core.pipeline_processor import PipelineProcessor
 from autocamtracker.core.telemetry_logger import TelemetryLogger
+from autocamtracker.core.performance_evaluation import PerformanceEvaluationTracker
 from autocamtracker.core.pipeline_worker import TrackingWorker
 from autocamtracker.vision.reframer import FramingConfig, Reframer
 from autocamtracker.vision.scene_cut import SceneCutDetector
@@ -65,8 +66,9 @@ from autocamtracker.ui.mixins.ui_builder import UIBuilderMixin
 from autocamtracker.ui.mixins.identity_panel import IdentityPanelMixin
 from autocamtracker.ui.mixins.video_pipeline import VideoPipelineMixin
 from autocamtracker.ui.mixins.commands import CommandsMixin
+from autocamtracker.ui.mixins.performance_panel import PerformancePanelMixin
 
-class AutoCamTrackerApp(UIBuilderMixin, IdentityPanelMixin, VideoPipelineMixin, CommandsMixin):
+class AutoCamTrackerApp(UIBuilderMixin, IdentityPanelMixin, VideoPipelineMixin, CommandsMixin, PerformancePanelMixin):
     def __init__(self, root: tk.Tk, config: AppConfig | None = None) -> None:
         self.root = root
         self.config = config or AppConfig()
@@ -89,6 +91,7 @@ class AutoCamTrackerApp(UIBuilderMixin, IdentityPanelMixin, VideoPipelineMixin, 
         self.auto_feature_sampler = AutoFeatureSampler(self.feature_gallery)
         self.scene_cut_detector = SceneCutDetector()
         self.telemetry_logger = TelemetryLogger(self.config.telemetry_dir)
+        self.performance_evaluator = PerformanceEvaluationTracker()
         self.reframer = Reframer(
             FramingConfig(
                 output_width=self.config.output_width,
@@ -144,6 +147,7 @@ class AutoCamTrackerApp(UIBuilderMixin, IdentityPanelMixin, VideoPipelineMixin, 
         self.identity_session_links = IdentitySessionLinks()
         self.last_identity_panel_refresh_at = 0.0
         self.identity_preview_window: tk.Toplevel | None = None
+        self.performance_window: tk.Toplevel | None = None
         self.identity_preview_label: ttk.Label | None = None
         self.identity_preview_photo = None
         self.identity_preview_vehicle_id: int | None = None

@@ -406,7 +406,13 @@ class UIBuilderMixin:
             anchor="w",
             width=1,
         )
-        self.status_label.grid(row=2, column=0, columnspan=2, sticky="ew")
+        self.status_label.grid(row=2, column=0, sticky="ew")
+        self.performance_button = ttk.Button(
+            main,
+            text="效能評估",
+            command=self.open_performance_evaluation_page,
+        )
+        self.performance_button.grid(row=2, column=1, sticky="e", padx=(8, 0))
         self.refresh_identity_db_panel()
         self._update_transport_actions()
 
