@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "video_root": "evaluation/gid_loss_videos",
+  "metrics": {
+    "gid_lock_rate_min": 0.9,
+    "max_consecutive_lost_frames": 12,
+    "id_switches_max": 0,
+    "median_reacquire_frames_max": 8,
+    "motor_unsafe_frames_max": 0
+  },
+  "scenarios": [
+    {
+      "id": "occlusion",
+      "name": "遮擋",
+      "video": "occlusion.mp4",
+      "description": "Target vehicle is briefly blocked by foreground objects or other cars."
+    },
+    {
+      "id": "crossing_traffic",
+      "name": "車交會",
+      "video": "crossing_traffic.mp4",
+      "description": "Multiple visually similar vehicles pass or overlap near the selected target."
+    },
+    {
+      "id": "fast_lateral",
+      "name": "快速橫移",
+      "video": "fast_lateral.mp4",
+      "description": "Selected vehicle moves quickly across the frame and stresses latency compensation."
+    },
+    {
+      "id": "exit_reenter",
+      "name": "出畫面再進來",
+      "video": "exit_reenter.mp4",
+      "description": "Selected vehicle leaves the frame and later re-enters from a plausible corridor."
+    }
+  ]
+}

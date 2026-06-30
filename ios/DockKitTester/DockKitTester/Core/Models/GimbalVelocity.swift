@@ -31,10 +31,13 @@ struct GimbalCalibrationProfile: Codable, Equatable, Sendable {
     var maxYawSpeed = 0.35
     var maxPitchSpeed = 0.22
     var deadZone = 0.05
+    var smoothingOldWeight = 0.7
+    var feedForwardGain = 0.22
     var minimumErrorImprovement = 0.01
     var maxNonImprovingUpdates = 8
     var edgeStopMargin = 0.04
     var edgeSlowMargin = 0.14
+    var lostCommandTimeout = 0.5
     var lostAutoReturnDelay = 1.0
     var stableLockRequiredFrames = 5
 
@@ -45,13 +48,19 @@ struct GimbalCalibrationProfile: Codable, Equatable, Sendable {
             maxYawSpeed: clamped(maxYawSpeed, min: 0.08, max: 0.8),
             maxPitchSpeed: clamped(maxPitchSpeed, min: 0.06, max: 0.5),
             deadZone: clamped(deadZone, min: 0.02, max: 0.2),
+            smoothingOldWeight: clamped(smoothingOldWeight, min: 0.25, max: 0.9),
             yawDirection: yawInverted ? -1 : 1,
             pitchDirection: pitchInverted ? -1 : 1,
             minimumErrorImprovement: clamped(minimumErrorImprovement, min: 0.0, max: 0.08),
             maxNonImprovingUpdates: max(3, min(30, maxNonImprovingUpdates)),
             edgeStopMargin: clamped(edgeStopMargin, min: 0.02, max: 0.12),
-            edgeSlowMargin: clamped(edgeSlowMargin, min: 0.08, max: 0.24)
+            edgeSlowMargin: clamped(edgeSlowMargin, min: 0.08, max: 0.24),
+            feedForwardGain: clamped(feedForwardGain, min: 0.0, max: 0.6)
         )
+    }
+
+    var clampedLostCommandTimeout: Double {
+        clamped(lostCommandTimeout, min: 0.2, max: 2.0)
     }
 
     var clampedLostAutoReturnDelay: Double {

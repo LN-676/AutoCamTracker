@@ -505,6 +505,9 @@ class CommandsMixin:
         if self.identity_preview_window is not None:
             self.identity_preview_window.destroy()
             self.identity_preview_window = None
+        if getattr(self, "diagnostics_window", None) is not None and self.diagnostics_window.winfo_exists():
+            self.diagnostics_window.destroy()
+            self.diagnostics_window = None
         if self.detector is not None:
             self._close_detector()
             self.detector = None

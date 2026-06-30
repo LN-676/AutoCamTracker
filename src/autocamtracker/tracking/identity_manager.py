@@ -182,8 +182,12 @@ class GlobalIdentityManager:
         self.last_reacquire_score = 0.0
         self.camera_cut_seen = False
         self.auto_reid_min_score = 0.72
+        self.auto_reid_high_score = 0.84
+        self.auto_reid_low_score = 0.58
         self.auto_reid_margin = 0.08
         self.auto_reid_confirm_frames = 3
+        self.last_reid_confidence_level = "unknown"
+        self.motor_safe_to_track = True
         self._auto_reid_pending_track_id: int | None = None
         self._auto_reid_pending_count = 0
 
@@ -203,12 +207,16 @@ class GlobalIdentityManager:
         self.selected_identity = None
         self.status = "idle"
         self.last_reacquire_score = 0.0
+        self.last_reid_confidence_level = "unknown"
+        self.motor_safe_to_track = True
         self.camera_cut_seen = False
         self.reacquire.reset_pending()
         self._reset_auto_reid_pending()
 
     def set_auto_reid_threshold(self, min_score: float) -> None:
         self.auto_reid_min_score = max(0.0, min(1.0, float(min_score)))
+        self.auto_reid_high_score = max(self.auto_reid_min_score, min(1.0, self.auto_reid_min_score + 0.12))
+        self.auto_reid_low_score = max(0.0, min(self.auto_reid_min_score, self.auto_reid_min_score - 0.14))
         self._reset_auto_reid_pending()
 
     def select_detection(self, detection: TrackedDetection, frame, persist: bool = True) -> VehicleIdentity:
@@ -324,6 +332,8 @@ class GlobalIdentityManager:
         if self.selected_identity is None:
             self.status = "idle"
             self.last_reacquire_score = 0.0
+            self.last_reid_confidence_level = "unknown"
+            self.motor_safe_to_track = True
             return []
 
         target = self._find_by_current_track(detections)
@@ -331,15 +341,21 @@ class GlobalIdentityManager:
             target, score = self._choose_auto_reid_target(detections, frame)
             if target is None and not self._selected_gid_has_master_features():
                 target, score = self.reacquire.choose(self.selected_identity, detections, frame)
+                if target is not None:
+                    self.last_reid_confidence_level = "confirmed"
+                    self.motor_safe_to_track = True
             self.last_reacquire_score = score
         else:
             self.last_reacquire_score = 1.0
+            self.last_reid_confidence_level = "high"
+            self.motor_safe_to_track = True
             self._reset_auto_reid_pending()
 
         if target is not None:
             self._update_identity(target, frame)
             self.status = "tracking"
             self.selected_identity.status = "tracking"
+            self.motor_safe_to_track = self.last_reid_confidence_level in {"high", "confirmed", "track"}
             self.camera_cut_seen = False
             return [self._selected_target_from_detection(target, "tracking")]
 
@@ -352,6 +368,8 @@ class GlobalIdentityManager:
         ):
             self.status = "tracking"
             identity.status = "coasting"
+            self.last_reid_confidence_level = "coasting"
+            self.motor_safe_to_track = identity.lost_frames <= 3
             return [self._coasted_selected_target(frame.shape)]
         if self.camera_cut_seen:
             self.status = "camera_cut"
@@ -362,6 +380,9 @@ class GlobalIdentityManager:
         else:
             self.status = "tracking"
         identity.status = self.status
+        if self.last_reid_confidence_level not in {"low", "candidate"}:
+            self.last_reid_confidence_level = "lost"
+        self.motor_safe_to_track = False
         return [self._selected_target_from_identity()]
 
     def _choose_auto_reid_target(
@@ -385,15 +406,29 @@ class GlobalIdentityManager:
             frame,
         )
         if not ranked:
+            self.last_reid_confidence_level = "none"
+            self.motor_safe_to_track = False
             return None, 0.0
 
         best = ranked[0]
         second_score = ranked[1].score if len(ranked) > 1 else 0.0
-        if (
-            best.score < self.auto_reid_min_score
-            or best.score - second_score < self.auto_reid_margin
-        ):
+        margin = best.score - second_score
+        if best.score < self.auto_reid_low_score or margin < self.auto_reid_margin:
             self._reset_auto_reid_pending()
+            self.last_reid_confidence_level = "low"
+            self.motor_safe_to_track = False
+            return None, best.score
+
+        if best.score >= self.auto_reid_high_score:
+            self._reset_auto_reid_pending()
+            self.last_reid_confidence_level = "high"
+            self.motor_safe_to_track = True
+            return best.detection, best.score
+
+        if best.score < self.auto_reid_min_score:
+            self._reset_auto_reid_pending()
+            self.last_reid_confidence_level = "candidate"
+            self.motor_safe_to_track = False
             return None, best.score
 
         pending_key = self._reid_pending_key(best.detection)
@@ -405,7 +440,11 @@ class GlobalIdentityManager:
 
         if self._auto_reid_pending_count >= self.auto_reid_confirm_frames:
             self._reset_auto_reid_pending()
+            self.last_reid_confidence_level = "confirmed"
+            self.motor_safe_to_track = True
             return best.detection, best.score
+        self.last_reid_confidence_level = "pending"
+        self.motor_safe_to_track = False
         return None, best.score
 
     def _selected_gid_has_master_features(self) -> bool:

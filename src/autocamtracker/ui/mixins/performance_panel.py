@@ -10,6 +10,119 @@ from autocamtracker.core.performance_evaluation import (
 
 
 class PerformancePanelMixin:
+    def open_diagnostics_page(self) -> None:
+        if getattr(self, "diagnostics_window", None) is not None and self.diagnostics_window.winfo_exists():
+            self.diagnostics_window.deiconify()
+            self.diagnostics_window.lift()
+            return
+
+        window = tk.Toplevel(self.root)
+        self.diagnostics_window = window
+        window.title("一鍵診斷")
+        window.minsize(560, 420)
+        window.protocol("WM_DELETE_WINDOW", self.close_diagnostics_page)
+
+        outer = ttk.Frame(window, padding=12)
+        outer.grid(row=0, column=0, sticky="nsew")
+        window.columnconfigure(0, weight=1)
+        window.rowconfigure(0, weight=1)
+        outer.columnconfigure(1, weight=1)
+
+        ttk.Label(outer, text="一鍵診斷", font=("TkDefaultFont", 16, "bold")).grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=(0, 10),
+        )
+        self.diagnostics_labels = {}
+        for row, key in enumerate(
+            (
+                "fps",
+                "latency",
+                "websocket",
+                "dockkit",
+                "motor",
+                "tracking",
+                "reid",
+                "last_stop",
+            ),
+            start=1,
+        ):
+            ttk.Label(outer, text=key.replace("_", " ").title()).grid(row=row, column=0, sticky="w", pady=4)
+            label = ttk.Label(outer, text="--", anchor="e")
+            label.grid(row=row, column=1, sticky="ew", pady=4)
+            self.diagnostics_labels[key] = label
+
+        ttk.Button(outer, text="Close", command=self.close_diagnostics_page).grid(
+            row=9,
+            column=1,
+            sticky="e",
+            pady=(12, 0),
+        )
+        self._refresh_diagnostics_page()
+
+    def close_diagnostics_page(self) -> None:
+        window = getattr(self, "diagnostics_window", None)
+        if window is not None and window.winfo_exists():
+            window.destroy()
+        self.diagnostics_window = None
+
+    def _refresh_diagnostics_page(self) -> None:
+        window = getattr(self, "diagnostics_window", None)
+        if window is None or not window.winfo_exists():
+            return
+        labels = self.diagnostics_labels
+        frame_data = self.current_frame_data
+        motor_status = self.tracking_server.motor_status
+        labels["fps"].configure(
+            text=(
+                f"display {frame_data.display_fps:.1f} / source {frame_data.source_fps:.1f}"
+                if frame_data is not None and frame_data.source_fps is not None
+                else f"display {self.fps:.1f}"
+            )
+        )
+        labels["latency"].configure(
+            text=(
+                f"receive {self._format_number(frame_data.receive_latency_ms, suffix=' ms')} / "
+                f"pipeline {self._format_number(frame_data.pipeline_time_ms, suffix=' ms')} / "
+                f"comp {self._format_number(frame_data.latency_compensation_ms, suffix=' ms')}"
+                if frame_data is not None
+                else "--"
+            )
+        )
+        labels["websocket"].configure(
+            text=f"{'running' if self.tracking_server.is_running else 'off'} · clients {self.tracking_server.client_count}"
+        )
+        labels["dockkit"].configure(
+            text=(
+                f"ready={self.tracking_server.motor_ready} docked={motor_status.docked} manual={motor_status.manual_ready}"
+                if motor_status is not None
+                else "no motor status"
+            )
+        )
+        labels["motor"].configure(
+            text=f"armed={self.iphone_motor_tracking_enabled} velocity={motor_status.current_velocity if motor_status else None}"
+        )
+        labels["tracking"].configure(
+            text=(
+                f"{frame_data.tracking_status} gid={frame_data.selected_global_vehicle_id} "
+                f"lid={frame_data.selected_local_track_id} lost={frame_data.lost_frames}"
+                if frame_data is not None
+                else "idle"
+            )
+        )
+        labels["reid"].configure(
+            text=(
+                f"{frame_data.reid_confidence_level} score={frame_data.reacquire_score:.2f} "
+                f"motor_safe={frame_data.motor_safe_to_track}"
+                if frame_data is not None
+                else "--"
+            )
+        )
+        labels["last_stop"].configure(text=motor_status.last_stop_reason if motor_status else "--")
+        window.after(500, self._refresh_diagnostics_page)
+
     def open_performance_evaluation_page(self) -> None:
         if getattr(self, "performance_window", None) is not None and self.performance_window.winfo_exists():
             self.performance_window.deiconify()

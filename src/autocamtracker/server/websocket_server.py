@@ -76,6 +76,8 @@ def tracking_message(
     bbox_height: float | None = None,
     zoom_factor: float | None = None,
     predicted: bool = False,
+    latency_compensation_ms: float | None = None,
+    reid_confidence_level: str | None = None,
 ) -> dict[str, Any]:
     """Build the versioned wire message consumed by TrackingCommand.swift."""
 
@@ -106,6 +108,10 @@ def tracking_message(
         message["zoom_factor"] = max(0.1, min(10.0, float(zoom_factor)))
     if predicted:
         message["predicted_target"] = True
+    if latency_compensation_ms is not None:
+        message["latency_compensation_ms"] = round(max(0.0, float(latency_compensation_ms)), 2)
+    if reid_confidence_level:
+        message["reid_confidence_level"] = str(reid_confidence_level)
     return message
 
 
@@ -128,7 +134,11 @@ def frame_tracking_message(frame_data, frame_shape, sequence: int = 0) -> dict[s
         None,
     )
     framing_mode = getattr(getattr(frame_data, "framing_status", None), "framing_mode", "medium")
-    if fresh_target is None or frame_data.tracking_status != "tracking":
+    if (
+        fresh_target is None
+        or frame_data.tracking_status != "tracking"
+        or not getattr(frame_data, "motor_safe_to_track", True)
+    ):
         now = monotonic()
         if _last_unlocked_at is None:
             _last_unlocked_at = now
@@ -153,21 +163,32 @@ def frame_tracking_message(frame_data, frame_shape, sequence: int = 0) -> dict[s
     zoom_factor = zoom_factor_for_framing(framing_mode)
     _last_locked_zoom_factor = zoom_factor
     _last_unlocked_at = None
+    latency_ms = float(getattr(frame_data, "latency_compensation_ms", 0.0) or 0.0)
+    source_fps = float(getattr(frame_data, "source_fps", None) or 30.0)
+    frames_ahead = min(3.0, max(0.0, latency_ms / max(1.0, 1000.0 / max(1.0, source_fps))))
+    velocity_x, velocity_y = getattr(frame_data, "target_velocity", (0.0, 0.0))
+    projected_x = max(0.0, min(float(frame_w), fresh_target.center[0] + float(velocity_x) * frames_ahead))
+    projected_y = max(0.0, min(float(frame_h), fresh_target.center[1] + float(velocity_y) * frames_ahead))
+    frame_data.projected_target_center = (projected_x, projected_y)
+    compensated_error_x = status.error_x + (projected_x - fresh_target.center[0])
+    compensated_error_y = status.error_y + (projected_y - fresh_target.center[1])
     return tracking_message(
         target_locked=True,
         target_id=target_id,
-        error_x=status.error_x / max(1.0, frame_w / 2.0),
-        error_y=status.error_y / max(1.0, frame_h / 2.0),
+        error_x=compensated_error_x / max(1.0, frame_w / 2.0),
+        error_y=compensated_error_y / max(1.0, frame_h / 2.0),
         confidence=fresh_target.confidence,
         sequence=sequence,
         frame_width=frame_w,
         frame_height=frame_h,
-        target_x=fresh_target.center[0] / max(1.0, frame_w),
-        target_y=fresh_target.center[1] / max(1.0, frame_h),
+        target_x=projected_x / max(1.0, frame_w),
+        target_y=projected_y / max(1.0, frame_h),
         bbox_width=bbox_width,
         bbox_height=(bbox[3] - bbox[1]) / max(1.0, frame_h),
         zoom_factor=zoom_factor,
         predicted=fresh_target.status == "coasting",
+        latency_compensation_ms=latency_ms,
+        reid_confidence_level=getattr(frame_data, "reid_confidence_level", None),
     )
 
 

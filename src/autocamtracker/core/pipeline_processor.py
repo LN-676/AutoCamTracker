@@ -74,6 +74,22 @@ class PipelineProcessor:
         preview_started_at = time()
         before_frame = draw_detections(frame, detections) if render_preview else frame
         preview_time_ms = (time() - preview_started_at) * 1000.0
+        pipeline_time_ms = (time() - pipeline_started_at) * 1000.0
+        latency_compensation_ms = sum(
+            value
+            for value in (
+                receive_latency_ms,
+                decode_time_ms,
+                inference_time_ms,
+                pipeline_time_ms,
+            )
+            if value is not None and value > 0.0
+        )
+        target_velocity = (
+            self.identity_manager.selected_identity.velocity
+            if self.identity_manager.selected_identity is not None
+            else (0.0, 0.0)
+        )
 
         return FrameData(
             raw_frame=frame,
@@ -89,11 +105,15 @@ class PipelineProcessor:
             camera_cut_detected=camera_cut,
             lost_frames=self.identity_manager.lost_frames,
             reacquire_score=self.identity_manager.last_reacquire_score,
+            reid_confidence_level=self.identity_manager.last_reid_confidence_level,
+            motor_safe_to_track=self.identity_manager.motor_safe_to_track,
+            target_velocity=target_velocity,
+            latency_compensation_ms=latency_compensation_ms,
             source_fps=source_fps,
             inference_time_ms=inference_time_ms,
             decode_time_ms=decode_time_ms,
             receive_latency_ms=receive_latency_ms,
-            pipeline_time_ms=(time() - pipeline_started_at) * 1000.0,
+            pipeline_time_ms=pipeline_time_ms,
             identity_time_ms=identity_time_ms,
             reframe_time_ms=reframe_time_ms,
             preview_time_ms=preview_time_ms,

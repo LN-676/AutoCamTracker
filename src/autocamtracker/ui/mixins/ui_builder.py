@@ -412,7 +412,13 @@ class UIBuilderMixin:
             text="效能評估",
             command=self.open_performance_evaluation_page,
         )
-        self.performance_button.grid(row=2, column=1, sticky="e", padx=(8, 0))
+        self.performance_button.grid(row=2, column=1, sticky="w", padx=(8, 0))
+        self.diagnostics_button = ttk.Button(
+            main,
+            text="一鍵診斷",
+            command=self.open_diagnostics_page,
+        )
+        self.diagnostics_button.grid(row=2, column=1, sticky="e", padx=(8, 0))
         self.refresh_identity_db_panel()
         self._update_transport_actions()
 

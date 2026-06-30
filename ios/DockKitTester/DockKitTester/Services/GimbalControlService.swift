@@ -48,12 +48,32 @@ final class GimbalControlService: ObservableObject {
         updateCalibration { $0.deadZone = value }
     }
 
+    func setSmoothingOldWeight(_ value: Double) {
+        updateCalibration { $0.smoothingOldWeight = value }
+    }
+
+    func setFeedForwardGain(_ value: Double) {
+        updateCalibration { $0.feedForwardGain = value }
+    }
+
     func setMinimumErrorImprovement(_ value: Double) {
         updateCalibration { $0.minimumErrorImprovement = value }
     }
 
     func setMaxNonImprovingUpdates(_ value: Double) {
         updateCalibration { $0.maxNonImprovingUpdates = Int(value.rounded()) }
+    }
+
+    func setEdgeStopMargin(_ value: Double) {
+        updateCalibration { $0.edgeStopMargin = value }
+    }
+
+    func setEdgeSlowMargin(_ value: Double) {
+        updateCalibration { $0.edgeSlowMargin = value }
+    }
+
+    func setLostCommandTimeout(_ value: Double) {
+        updateCalibration { $0.lostCommandTimeout = value }
     }
 
     func setLostAutoReturnDelay(_ value: Double) {

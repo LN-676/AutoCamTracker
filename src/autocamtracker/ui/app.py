@@ -148,6 +148,7 @@ class AutoCamTrackerApp(UIBuilderMixin, IdentityPanelMixin, VideoPipelineMixin, 
         self.last_identity_panel_refresh_at = 0.0
         self.identity_preview_window: tk.Toplevel | None = None
         self.performance_window: tk.Toplevel | None = None
+        self.diagnostics_window: tk.Toplevel | None = None
         self.identity_preview_label: ttk.Label | None = None
         self.identity_preview_photo = None
         self.identity_preview_vehicle_id: int | None = None

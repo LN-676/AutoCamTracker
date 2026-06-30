@@ -34,7 +34,8 @@ final class V13NetworkClient: ObservableObject {
     private var cameraSendInFlight = false
     private var intentionalDisconnect = false
     private var sequenceValidator = TrackingCommandSequenceValidator()
-    private let timeout: Duration = .milliseconds(500)
+    private var timeout: Duration = .milliseconds(500)
+    private var timeoutLabel = "500 ms"
     private static let serverURLKey = "AutoCamTrackerServerURL"
 
     init(logger: AppLogger) {
@@ -73,6 +74,15 @@ final class V13NetworkClient: ObservableObject {
             await self.receiveLoop(task: task)
         }
         await sendControl(action: "request_state")
+    }
+
+    func setTrackingTimeout(seconds: Double) {
+        let clamped = max(0.2, min(2.0, seconds))
+        timeout = .milliseconds(Int((clamped * 1_000).rounded()))
+        timeoutLabel = String(format: "%.1f s", clamped)
+        if lastCommand != nil {
+            armTimeout()
+        }
     }
 
     func receive(data: Data) async {
@@ -313,7 +323,7 @@ final class V13NetworkClient: ObservableObject {
             guard let self else { return }
             do {
                 try await Task.sleep(for: self.timeout)
-                await triggerTimeout(reason: "no V1.75 data for 500 ms")
+                await triggerTimeout(reason: "no V1.75 data for \(self.timeoutLabel)")
             } catch {
                 return
             }

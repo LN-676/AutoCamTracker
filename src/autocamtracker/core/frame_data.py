@@ -31,6 +31,11 @@ class FrameData:
     camera_cut_detected: bool = False
     lost_frames: int = 0
     reacquire_score: float = 0.0
+    reid_confidence_level: str = "unknown"
+    motor_safe_to_track: bool = True
+    target_velocity: tuple[float, float] = (0.0, 0.0)
+    latency_compensation_ms: float = 0.0
+    projected_target_center: tuple[float, float] | None = None
     display_fps: float = 0.0
     source_fps: float | None = None
     inference_time_ms: float = 0.0

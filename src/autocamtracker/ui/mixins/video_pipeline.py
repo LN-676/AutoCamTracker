@@ -120,7 +120,7 @@ class VideoPipelineMixin:
             self.iphone_motor_tracking_enabled,
             self.tracking_server.motor_ready,
             shot_decision,
-        )
+        ) and frame_data.motor_safe_to_track
         if motor_output_active:
             self.tracking_server.publish_frame(frame_data, frame.shape)
         elif (
@@ -140,10 +140,6 @@ class VideoPipelineMixin:
         self.publish_desktop_state(force=False)
 
     def _log_frame_telemetry(self, frame_data: FrameData, frame_shape, shot_decision, motor_output_active: bool) -> None:
-        now = time()
-        if now - self.last_frame_telemetry_at < 0.5:
-            return
-        self.last_frame_telemetry_at = now
         selected_target = frame_data.selected_targets[0] if frame_data.selected_targets else None
         frame_h, frame_w = frame_shape[:2]
         target_locked = (
@@ -164,10 +160,14 @@ class VideoPipelineMixin:
             selected_gid=frame_data.selected_global_vehicle_id,
             selected_lid=frame_data.selected_local_track_id,
             lost_frames=frame_data.lost_frames,
+            reid_confidence_level=frame_data.reid_confidence_level,
+            motor_safe_to_track=frame_data.motor_safe_to_track,
             candidate_count=len(frame_data.candidates),
             confidence=float(fresh_target.confidence) if fresh_target is not None else 0.0,
             bbox=fresh_target.bbox if fresh_target is not None else None,
             target_center=fresh_target.center if fresh_target is not None else None,
+            projected_target_center=frame_data.projected_target_center,
+            target_velocity=frame_data.target_velocity,
             frame_width=frame_w,
             frame_height=frame_h,
             framing_mode=self.framing_var.get(),
@@ -179,6 +179,7 @@ class VideoPipelineMixin:
             motor_armed=self.iphone_motor_tracking_enabled,
             motor_ready=self.tracking_server.motor_ready,
             motor_output_active=motor_output_active,
+            motor_velocity=motor_status.current_velocity if motor_status is not None else None,
             requested_zoom_factor=self._frame_zoom_factor(frame_data, fresh_target, frame_shape),
             phone_camera_zoom_factor=motor_status.camera_zoom_factor if motor_status is not None else None,
             phone_camera_display_zoom_factor=(
@@ -195,6 +196,7 @@ class VideoPipelineMixin:
                 else None
             ),
             receive_latency_ms=frame_data.receive_latency_ms,
+            latency_compensation_ms=frame_data.latency_compensation_ms,
             decode_time_ms=frame_data.decode_time_ms,
             inference_time_ms=frame_data.inference_time_ms,
             pipeline_time_ms=frame_data.pipeline_time_ms,
@@ -535,10 +537,16 @@ class VideoPipelineMixin:
                 "error_y": max(-1.0, min(1.0, float(error_y))),
                 "confidence": float(fresh_target.confidence) if fresh_target is not None else 0.0,
                 "predicted_target": bool(fresh_target is not None and fresh_target.status == "coasting"),
+                "reid_confidence_level": frame_data.reid_confidence_level if frame_data is not None else "unknown",
+                "motor_safe_to_track": frame_data.motor_safe_to_track if frame_data is not None else False,
                 "lost_frames": int(frame_data.lost_frames) if frame_data is not None else 0,
                 "candidate_count": len(frame_data.candidates) if frame_data is not None else 0,
                 "bbox": fresh_target.bbox if fresh_target is not None else None,
                 "target_center": fresh_target.center if fresh_target is not None else None,
+                "projected_target_center": (
+                    frame_data.projected_target_center if frame_data is not None else None
+                ),
+                "target_velocity": frame_data.target_velocity if frame_data is not None else None,
             },
             "motor": {
                 "armed": bool(self.iphone_motor_tracking_enabled),
@@ -567,7 +575,12 @@ class VideoPipelineMixin:
             },
             "diagnostics": {
                 "desktop_version": f"AutoCamTracker V{SOURCE_VERSION}",
+                "display_fps": frame_data.display_fps if frame_data is not None else 0.0,
+                "source_fps": frame_data.source_fps if frame_data is not None else None,
+                "websocket_running": bool(self.tracking_server.is_running),
+                "websocket_clients": int(self.tracking_server.client_count),
                 "receive_latency_ms": frame_data.receive_latency_ms if frame_data is not None else None,
+                "latency_compensation_ms": frame_data.latency_compensation_ms if frame_data is not None else 0.0,
                 "decode_time_ms": frame_data.decode_time_ms if frame_data is not None else 0.0,
                 "inference_time_ms": frame_data.inference_time_ms if frame_data is not None else 0.0,
                 "pipeline_time_ms": frame_data.pipeline_time_ms if frame_data is not None else 0.0,

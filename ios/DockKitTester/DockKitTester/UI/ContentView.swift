@@ -53,6 +53,9 @@ struct ContentView: View {
         .onChange(of: networkClient.desktopState?.framing?.zoomFactor) { _, newValue in
             cameraSession.applyTrackingDisplayZoom(newValue)
         }
+        .onChange(of: controlService.calibration.lostCommandTimeout) { _, newValue in
+            networkClient.setTrackingTimeout(seconds: newValue)
+        }
     }
 
     private var cameraTab: some View {
@@ -203,6 +206,20 @@ struct ContentView: View {
                 onChange: controlService.setDeadZone
             )
             calibrationSlider(
+                title: "平滑舊值權重",
+                value: controlService.calibration.smoothingOldWeight,
+                range: 0.25...0.9,
+                format: "%.2f",
+                onChange: controlService.setSmoothingOldWeight
+            )
+            calibrationSlider(
+                title: "前饋增益",
+                value: controlService.calibration.feedForwardGain,
+                range: 0.0...0.6,
+                format: "%.2f",
+                onChange: controlService.setFeedForwardGain
+            )
+            calibrationSlider(
                 title: "改善門檻",
                 value: controlService.calibration.minimumErrorImprovement,
                 range: 0.0...0.08,
@@ -215,6 +232,27 @@ struct ContentView: View {
                 range: 3...30,
                 format: "%.0f",
                 onChange: controlService.setMaxNonImprovingUpdates
+            )
+            calibrationSlider(
+                title: "靠邊停止區",
+                value: controlService.calibration.edgeStopMargin,
+                range: 0.02...0.12,
+                format: "%.2f",
+                onChange: controlService.setEdgeStopMargin
+            )
+            calibrationSlider(
+                title: "靠邊降速區",
+                value: controlService.calibration.edgeSlowMargin,
+                range: 0.08...0.24,
+                format: "%.2f",
+                onChange: controlService.setEdgeSlowMargin
+            )
+            calibrationSlider(
+                title: "指令遺失 timeout",
+                value: controlService.calibration.lostCommandTimeout,
+                range: 0.2...2.0,
+                format: "%.1f",
+                onChange: controlService.setLostCommandTimeout
             )
             calibrationSlider(
                 title: "失追回 Home 秒數",
@@ -265,6 +303,7 @@ struct ContentView: View {
     }
 
     private func prepareServices() async {
+        networkClient.setTrackingTimeout(seconds: controlService.calibration.clampedLostCommandTimeout)
         cameraSession.onJPEGFrame = { [weak networkClient, weak dockKitManager, weak controlService, weak cameraSession] data in
             Task { @MainActor in
                 guard let networkClient else { return }
